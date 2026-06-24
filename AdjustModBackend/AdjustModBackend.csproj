@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <RootNamespace>AdjustModBackend</RootNamespace>
+    <AssemblyName>AdjustModBackend</AssemblyName>
+    <Nullable>enable</Nullable>
+    <LangVersion>10</LangVersion>
+    <OutputPath>..\Plugins\</OutputPath>
+    <AppendTargetFrameworkToOutputPath>false</AppendTargetFrameworkToOutputPath>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <GameDir>D:\Games\Steam\steamapps\common\The Scroll Of Taiwu</GameDir>
+  </PropertyGroup>
+
+  <!-- 共享：游戏路径、Mod 名、构建后自动部署到游戏目录。详见 ..\AdjustMod.props -->
+  <Import Project="..\AdjustMod.props" />
+
+  <ItemGroup>
+    <Reference Include="GameData">
+      <HintPath>$(GameDir)\Backend\GameData.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GameData.Shared">
+      <HintPath>$(GameDir)\Backend\GameData.Shared.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="TaiwuModdingLib">
+      <HintPath>$(GameDir)\Backend\TaiwuModdingLib.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(GameDir)\Backend\0Harmony.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+  </ItemGroup>
+</Project>

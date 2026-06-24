@@ -1,0 +1,49 @@
+<Project>
+  <!--
+    本仓库（ZjhAdjust）共享的太吾 MOD 构建属性与自动部署目标。
+
+    被前端 (AdjustMod.csproj) 和后端 (AdjustModBackend.csproj) 各自 import 一次。
+    构建成功后，会把：
+      - Config.lua / Settings.Lua（Mod 根的源文件）
+      - 当前项目编译产物（dll/pdb/deps.json）
+    复制到游戏目录 <GameDir>\Mod\<TaiwuModName>\，无需手动拷贝。
+
+    复制别的 Mod 时：改 <TaiwuModName> 即可；如换机器或游戏装在别处，改 <GameDir>。
+  -->
+  <PropertyGroup>
+    <!-- 太吾绘卷游戏安装根目录 -->
+    <GameDir>D:\Games\Steam\steamapps\common\The Scroll Of Taiwu</GameDir>
+    <!-- 游戏内 Mod 目录名（与源码目录名、Config.lua 的 Title 解耦，可不同） -->
+    <TaiwuModName>ZjhAdjust</TaiwuModName>
+    <!-- 部署目标目录 = 游戏根\Mod\<TaiwuModName> -->
+    <TaiwuModDeployDir>$(GameDir)\Mod\$(TaiwuModName)</TaiwuModDeployDir>
+    <!-- 设为 false 可临时关闭自动部署（如只编译不发布到游戏目录） -->
+    <TaiwuModDeployEnabled Condition="'$(TaiwuModDeployEnabled)' == ''">true</TaiwuModDeployEnabled>
+  </PropertyGroup>
+
+  <!--
+    构建后自动部署。AfterTargets=Build 保证只在编译成功时执行。
+    幂等：每次 build 都覆盖同名文件，保证游戏目录与本仓库源同步。
+  -->
+  <Target Name="TaiwuDeployToGame" AfterTargets="Build" Condition="'$(TaiwuModDeployEnabled)' == 'true'">
+    <!-- 1) 创建目标目录（含 Plugins 子目录），已存在则跳过 -->
+    <MakeDir Directories="$(TaiwuModDeployDir)" />
+    <MakeDir Directories="$(TaiwuModDeployDir)\Plugins" />
+
+    <!-- 2) 复制 Mod 元信息与设置源文件（位于 Mod 根，相对项目目录是 ..\） -->
+    <Copy SourceFiles="..\Config.lua" DestinationFolder="$(TaiwuModDeployDir)" Condition="Exists('..\Config.lua')" />
+    <Copy SourceFiles="..\Settings.Lua" DestinationFolder="$(TaiwuModDeployDir)" Condition="Exists('..\Settings.Lua')" />
+
+    <!-- 3) 复制本项目的编译产物到 Plugins\。
+         只取当前项目自己的输出（OutputPath 即 ..\Plugins\），因此前端/后端各自构建互不冲突。
+         排除游戏已有的引用 DLL（它们在本仓库构建时 <Private>false</Private>，本来就不会复制）。 -->
+    <ItemGroup>
+      <_TaiwuDeployArtifacts Include="$(OutputPath)*.dll" />
+      <_TaiwuDeployArtifacts Include="$(OutputPath)*.pdb" />
+      <_TaiwuDeployArtifacts Include="$(OutputPath)*.deps.json" />
+    </ItemGroup>
+    <Copy SourceFiles="@(_TaiwuDeployArtifacts)" DestinationFolder="$(TaiwuModDeployDir)\Plugins" />
+
+    <Message Text="[$(MSBuildProjectName)] 已部署到 $(TaiwuModDeployDir)" Importance="high" />
+  </Target>
+</Project>

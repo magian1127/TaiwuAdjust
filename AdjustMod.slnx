@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="AdjustMod/AdjustMod.csproj" />
+  <Project Path="AdjustModBackend/AdjustModBackend.csproj" />
+</Solution>
