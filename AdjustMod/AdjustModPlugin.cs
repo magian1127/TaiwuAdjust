@@ -47,6 +47,13 @@ namespace AdjustMod
         private static FieldInfo _fiLayoutPage;             // TooltipBook.layoutPage
         private static FieldInfo _fiTextIncompleteState;    // TooltipBookPage.textIncompleteState（"完整/残缺"）
 
+        // ---- 制造自动填充 反射缓存 ----
+        // UI_Make 是 class，ResourceInts 是 struct。用 FieldRefAccess 拿 ref 才能原地改 struct 字段。
+        private static AccessTools.FieldRef<UI_Make, short> _refMaxMakeResourceTotalCount;   // 总物资上限
+        private static AccessTools.FieldRef<UI_Make, GameData.Domains.Character.ResourceInts> _refMaxMakeResourceCountInts;   // 各材料上限
+        private static AccessTools.FieldRef<UI_Make, GameData.Domains.Character.ResourceInts> _refCurMakeResourceCountInts;   // 当前投入量
+        private static MethodInfo _miCheckMakeCondition;    // UI_Make.CheckMakeCondition(bool, Action)
+
         public override void Initialize()
         {
             _modIdStr = ModIdStr;
@@ -76,7 +83,32 @@ namespace AdjustMod
             PatchMethod(harmony, typeof(Game.Views.MouseTips.Item.TooltipBookPage), "Refresh",
                 new[] { typeof(bool), typeof(int), typeof(sbyte), typeof(sbyte), typeof(sbyte) }, tbpPostfix);
 
-            Debug.Log($"[{ModIdStr}] 已加载 - TooltipBook / TooltipBookPage patch 完成");
+            // ---- 制造自动填充：反射缓存 + patch ----
+            InitCraftAutofillCaches();
+            var makePostfix = typeof(ModMain).GetMethod(nameof(SelectMakeItemSubType_Postfix), BF, null,
+                new[] { typeof(UI_Make) }, null);
+            PatchMethod(harmony, typeof(UI_Make), "SelectMakeItemSubType",
+                new[] { typeof(int), typeof(bool) }, makePostfix);
+
+            Debug.Log($"[{ModIdStr}] 已加载 - TooltipBook / TooltipBookPage / UI_Make patch 完成");
+        }
+
+        /// <summary>初始化制造自动填充用的反射缓存（字段 ref + 方法）</summary>
+        private static void InitCraftAutofillCaches()
+        {
+            try
+            {
+                _refMaxMakeResourceTotalCount = AccessTools.FieldRefAccess<UI_Make, short>("_maxMakeResourceTotalCount");
+                _refMaxMakeResourceCountInts = AccessTools.FieldRefAccess<UI_Make, GameData.Domains.Character.ResourceInts>("_maxMakeResourceCountInts");
+                _refCurMakeResourceCountInts = AccessTools.FieldRefAccess<UI_Make, GameData.Domains.Character.ResourceInts>("_curMakeResourceCountInts");
+                _miCheckMakeCondition = AccessTools.Method(typeof(UI_Make), "CheckMakeCondition",
+                    new[] { typeof(bool), typeof(Action) });
+                Debug.Log($"[{_modIdStr}] 制造自动填充反射缓存：{_refCurMakeResourceCountInts != null}, {_miCheckMakeCondition != null}");
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_modIdStr}] 制造自动填充反射缓存初始化异常: {ex.Message}");
+            }
         }
 
         private static void PatchMethod(Harmony harmony, Type type, string methodName, Type[] paramTypes, MethodInfo postfix)
@@ -258,6 +290,110 @@ namespace AdjustMod
                 t = t.parent;
             }
             return null;
+        }
+
+        // ==============================
+        // Patch: UI_Make.SelectMakeItemSubType —— 制造面板选好装备子类型后，自动按规则填满材料
+        // ==============================
+        private static void SelectMakeItemSubType_Postfix(UI_Make __instance)
+        {
+            if (__instance == null) return;
+            if (_refCurMakeResourceCountInts == null || _refMaxMakeResourceCountInts == null
+                || _refMaxMakeResourceTotalCount == null || _miCheckMakeCondition == null) return;
+
+            try
+            {
+                // 原方法末尾用 CheckMakeCondition(needRefreshMakeResult:true, ()=>{ AutoFillResource(); }) 异步触发官方填充。
+                // 这里再挂一个回调：在官方 AutoFillResource(只填 Food/Herb) 跑完、且上限/数据就绪后，补填 Wood/Metal/Jade/Fabric。
+                // 不直接同步写——因为原方法的异步 RefreshMakeResult 还没回来，数据未定。
+                ScheduleCraftAutofill(__instance);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_modIdStr}] SelectMakeItemSubType postfix 异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 挂一个延迟回调执行自动填充。通过调用游戏的 CheckMakeCondition(true, callback)，
+        /// 让 callback 在 RefreshMakeResult + OnCheckMakeCondition 完成后执行（此时数据/官方 AutoFill 都已就绪）。
+        /// </summary>
+        private static void ScheduleCraftAutofill(UI_Make make)
+        {
+            try
+            {
+                _miCheckMakeCondition.Invoke(make, new object[] { true, (Action)(() => DoCraftAutofill(make)) });
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_modIdStr}] ScheduleCraftAutofill 异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 自动填充核心：把 Wood/Metal/Fabric/Jade 按规则填满，Food/Herb 保留官方 AutoFill 的结果。
+        ///
+        /// 规则：先把上限低的材料(Wood/Metal/Fabric)填到各自类型上限，剩余额度全投 Jade(上限最高的那个)。
+        /// 自己计算最终值并直接写入字段，不依赖游戏的总额钳制或隐藏削减逻辑。
+        /// 仓库不够时：实际可填量会被后续 CheckMakeCondition 的 UI 显示标红，但字段值仍按目标设；
+        /// 游戏提交制造时会用 CheckMakeResource 校验，不够则不让确认——这是可接受的(等同玩家手动填超量)。
+        /// </summary>
+        private static void DoCraftAutofill(UI_Make make)
+        {
+            try
+            {
+                short maxTotal = _refMaxMakeResourceTotalCount(make);
+                ref var maxPerType = ref _refMaxMakeResourceCountInts(make);
+                ref var cur = ref _refCurMakeResourceCountInts(make);
+
+                if (maxTotal <= 0) return;
+
+                // 材料索引：0=Food 1=Wood 2=Metal 3=Jade 4=Fabric 5=Herb
+                // 我们处理 1/2/4，再处理 3(Jade)。0/5(Food/Herb) 保留官方 AutoFill 的值。
+                // 先收集 Food/Herb 已投入量（官方 AutoFill 填的），它们占用总额度。
+                int reserved = cur.Get(0) + cur.Get(5);
+                int budget = maxTotal - reserved;   // 可分配给 Wood/Metal/Jade/Fabric 的额度
+
+                // 目标值数组，初始为 Food/Herb 当前值，其余清 0
+                var target = new int[6];
+                target[0] = cur.Get(0);
+                target[5] = cur.Get(5);
+
+                // 步骤1：先填低上限的 Wood(1)/Metal(2)/Fabric(4)，各填到 min(类型上限, 剩余额度)
+                int[] order = { 1, 2, 4 };   // Wood, Metal, Fabric
+                foreach (int t in order)
+                {
+                    int cap = maxPerType.Get(t);
+                    if (cap <= 0 || budget <= 0) { target[t] = 0; continue; }
+                    int take = Math.Min(cap, budget);
+                    target[t] = take;
+                    budget -= take;
+                }
+
+                // 步骤2：剩余额度全给 Jade(3)（上限最高的那个）
+                {
+                    int cap = maxPerType.Get(3);
+                    if (cap > 0 && budget > 0)
+                    {
+                        target[3] = Math.Min(cap, budget);
+                        budget -= target[3];
+                    }
+                    else target[3] = 0;
+                }
+
+                // 写入字段（通过 ref 原地改 struct）
+                for (int t = 0; t < 6; t++)
+                    cur.Set(t, target[t]);
+
+                // 刷新 UI 显示 + 制造结果预览。needRefreshMakeResult:true 重算成品预览。
+                _miCheckMakeCondition.Invoke(make, new object[] { true, null });
+
+                Debug.Log($"[{_modIdStr}] 制造自动填充：W{target[1]} M{target[2]} J{target[3]} Fb{target[4]} (Food{target[0]}/Herb{target[5]}), 总额上限={maxTotal}");
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_modIdStr}] DoCraftAutofill 异常: {ex.Message}");
+            }
         }
 
         // ==============================
