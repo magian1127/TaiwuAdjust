@@ -40,6 +40,9 @@ namespace AdjustMod
 
         private static string _modIdStr = "";
 
+        /// <summary>日志前缀（固定可读，与 modIdStr 解耦）。modIdStr 是太吾生成的 "0_N"，序号会变且不可读。</summary>
+        private const string _logTag = "AdjustMod";
+
         // ---- 反射缓存 ----
         private static FieldInfo _fiItemKey;
         private static FieldInfo _fiItemData;
@@ -48,11 +51,14 @@ namespace AdjustMod
         private static FieldInfo _fiTextIncompleteState;    // TooltipBookPage.textIncompleteState（"完整/残缺"）
 
         // ---- 制造自动填充 反射缓存 ----
-        // UI_Make 是 class，ResourceInts 是 struct。用 FieldRefAccess 拿 ref 才能原地改 struct 字段。
-        private static AccessTools.FieldRef<UI_Make, short> _refMaxMakeResourceTotalCount;   // 总物资上限
-        private static AccessTools.FieldRef<UI_Make, GameData.Domains.Character.ResourceInts> _refMaxMakeResourceCountInts;   // 各材料上限
-        private static AccessTools.FieldRef<UI_Make, GameData.Domains.Character.ResourceInts> _refCurMakeResourceCountInts;   // 当前投入量
-        private static MethodInfo _miCheckMakeCondition;    // UI_Make.CheckMakeCondition(bool, Action)
+        // 当前游戏版本（1.0.20.x）的制造 UI 走 Game.Views.Make.MakeSubPageMake（不是老的 UI_Make）。
+        // MakeSubPageMake 是 class，ResourceInts 是 struct。用 FieldRefAccess 拿 ref 才能原地改 struct 字段。
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, short> _refMaxMakeResourceTotalCount;   // 总物资上限
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refMaxMakeResourceCountInts;   // 各材料上限
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refCurMakeResourceCountInts;   // 当前投入量
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refLastMakeResourceCountInts;  // 上次投入量（影响下次默认值）
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, sbyte> _refMainRequiredResourceType;   // 主材料类型（上限最高的，如玉石）
+        private static MethodInfo _miRefreshResourcePanel;   // MakeSubPageMake.RefreshResourcePanel() 刷新显示
 
         public override void Initialize()
         {
@@ -83,14 +89,16 @@ namespace AdjustMod
             PatchMethod(harmony, typeof(Game.Views.MouseTips.Item.TooltipBookPage), "Refresh",
                 new[] { typeof(bool), typeof(int), typeof(sbyte), typeof(sbyte), typeof(sbyte) }, tbpPostfix);
 
-            // ---- 制造自动填充：反射缓存 + patch ----
+            // ---- 制造自动填充：patch MakeSubPageMake.ResetResourceCount ----
+            // 选材料走 OnItemClickMaterial → SelectMaterial → ResetResourceCount，后者设上限+清零 cur。
+            // ResetResourceCount 跑完时上限已设好、cur 已清零，正是填充时机。多材料时原版默认填 0（全 0 bug 的根因）。
             InitCraftAutofillCaches();
-            var makePostfix = typeof(ModMain).GetMethod(nameof(SelectMakeItemSubType_Postfix), BF, null,
-                new[] { typeof(UI_Make) }, null);
-            PatchMethod(harmony, typeof(UI_Make), "SelectMakeItemSubType",
-                new[] { typeof(int), typeof(bool) }, makePostfix);
+            var makePostfix = typeof(ModMain).GetMethod(nameof(ResetResourceCount_Postfix), BF, null,
+                new[] { typeof(Game.Views.Make.MakeSubPageMake) }, null);
+            PatchMethod(harmony, typeof(Game.Views.Make.MakeSubPageMake), "ResetResourceCount",
+                Type.EmptyTypes, makePostfix);
 
-            Debug.Log($"[{ModIdStr}] 已加载 - TooltipBook / TooltipBookPage / UI_Make patch 完成");
+            Debug.Log($"[{_logTag}] 已加载 - TooltipBook / TooltipBookPage / MakeSubPageMake patch 完成");
         }
 
         /// <summary>初始化制造自动填充用的反射缓存（字段 ref + 方法）</summary>
@@ -98,16 +106,17 @@ namespace AdjustMod
         {
             try
             {
-                _refMaxMakeResourceTotalCount = AccessTools.FieldRefAccess<UI_Make, short>("_maxMakeResourceTotalCount");
-                _refMaxMakeResourceCountInts = AccessTools.FieldRefAccess<UI_Make, GameData.Domains.Character.ResourceInts>("_maxMakeResourceCountInts");
-                _refCurMakeResourceCountInts = AccessTools.FieldRefAccess<UI_Make, GameData.Domains.Character.ResourceInts>("_curMakeResourceCountInts");
-                _miCheckMakeCondition = AccessTools.Method(typeof(UI_Make), "CheckMakeCondition",
-                    new[] { typeof(bool), typeof(Action) });
-                Debug.Log($"[{_modIdStr}] 制造自动填充反射缓存：{_refCurMakeResourceCountInts != null}, {_miCheckMakeCondition != null}");
+                _refMaxMakeResourceTotalCount = AccessTools.FieldRefAccess<Game.Views.Make.MakeSubPageMake, short>("_maxMakeResourceTotalCount");
+                _refMaxMakeResourceCountInts = AccessTools.FieldRefAccess<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts>("_maxMakeResourceCountInts");
+                _refCurMakeResourceCountInts = AccessTools.FieldRefAccess<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts>("_curMakeResourceCountInts");
+                _refLastMakeResourceCountInts = AccessTools.FieldRefAccess<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts>("_lastMakeResourceCountInts");
+                _refMainRequiredResourceType = AccessTools.FieldRefAccess<Game.Views.Make.MakeSubPageMake, sbyte>("_mainRequiredResourceType");
+                _miRefreshResourcePanel = AccessTools.Method(typeof(Game.Views.Make.MakeSubPageMake), "RefreshResourcePanel", Type.EmptyTypes);
+                Debug.Log($"[{_logTag}] 制造自动填充反射缓存：{_refCurMakeResourceCountInts != null}, {_miRefreshResourcePanel != null}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] 制造自动填充反射缓存初始化异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] 制造自动填充反射缓存初始化异常: {ex.Message}");
             }
         }
 
@@ -118,15 +127,15 @@ namespace AdjustMod
                 var original = AccessTools.Method(type, methodName, paramTypes);
                 if (original == null)
                 {
-                    Debug.Log($"[{_modIdStr}] 未找到 {type.Name}.{methodName}({string.Join(",", paramTypes.Select(p => p.Name))})");
+                    Debug.Log($"[{_logTag}] 未找到 {type.Name}.{methodName}({string.Join(",", paramTypes.Select(p => p.Name))})");
                     return;
                 }
                 harmony.CreateProcessor(original).AddPostfix(postfix).Patch();
-                Debug.Log($"[{_modIdStr}] 已 patch {type.Name}.{methodName}({string.Join(",", paramTypes.Select(p => p.Name))})");
+                Debug.Log($"[{_logTag}] 已 patch {type.Name}.{methodName}({string.Join(",", paramTypes.Select(p => p.Name))})");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] patch {type.Name}.{methodName} 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] patch {type.Name}.{methodName} 异常: {ex.Message}");
             }
         }
 
@@ -134,6 +143,37 @@ namespace AdjustMod
         {
             _readStateCache.Clear();
             _pendingQueries.Clear();
+        }
+
+        // ==============================
+        // 设置读取 / 调试日志（通用 helper）
+        // ==============================
+
+        /// <summary>
+        /// 读取 bool 设置项。读不到（key 不存在或游戏未注入）时返回 defaultValue。
+        /// 每次 patch 触发时读，不缓存——保证玩家改设置后即时生效，无需重启。
+        /// </summary>
+        private static bool GetSettingBool(string key, bool defaultValue)
+        {
+            try
+            {
+                bool val = defaultValue;
+                return ModManager.GetSetting(_modIdStr, key, ref val) ? val : defaultValue;
+            }
+            catch
+            {
+                return defaultValue;
+            }
+        }
+
+        /// <summary>
+        /// 调试日志：仅当 DebugMode 设置开启时输出到 Player.log。
+        /// 用于运行时明细（填充结果、查询过程等）；注册/加载类启动日志用 Debug.Log 常开。
+        /// </summary>
+        private static void LogDebug(string msg)
+        {
+            if (GetSettingBool("DebugMode", false))
+                Debug.Log($"[{_logTag}] {msg}");
         }
 
         /// <summary>组合 (charId, bookId) 为单个 long 作为去重键</summary>
@@ -144,15 +184,14 @@ namespace AdjustMod
         // ==============================
         private static void TooltipBook_Refresh_Postfix(Game.Views.MouseTips.Item.TooltipBook __instance)
         {
+            if (!GetSettingBool("BookReadStatus", true)) return;
             try
             {
                 var itemDataObj = _fiItemData?.GetValue(__instance);
                 var itemKeyObj = _fiItemKey?.GetValue(__instance);
-                int charId = _fiCharId != null ? (_fiCharId.GetValue(__instance) as int? ?? -1) : -1;
 
-                int ownerCharId = (itemDataObj is ItemDisplayData id) ? id.OwnerCharId : -1;
-                // NPC 角色优先取 _charId，其次 OwnerCharId
-                int npcCharId = charId > 0 ? charId : ownerCharId;
+                // 用 _itemData.OwnerCharId（物品所属角色）。_charId 原版从不赋值，恒为 0（见 ResolveNpcCharId 注释）。
+                int npcCharId = (itemDataObj is ItemDisplayData id) ? id.OwnerCharId : -1;
 
                 if (itemKeyObj is not ItemKey bookKey) return;
                 if (npcCharId <= 0) return;
@@ -173,7 +212,7 @@ namespace AdjustMod
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] TooltipBook Refresh postfix 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] TooltipBook Refresh postfix 异常: {ex.Message}");
             }
         }
 
@@ -183,6 +222,7 @@ namespace AdjustMod
         // ==============================
         private static void TooltipBookPage_Refresh_Postfix(Game.Views.MouseTips.Item.TooltipBookPage __instance, int index)
         {
+            if (!GetSettingBool("BookReadStatus", true)) return;
             try
             {
                 // 从父级链向上找 TooltipBook，取其 _itemKey / _itemData / _charId
@@ -208,17 +248,21 @@ namespace AdjustMod
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] TooltipBookPage Refresh postfix 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] TooltipBookPage Refresh postfix 异常: {ex.Message}");
             }
         }
 
-        /// <summary>从 TooltipBook 实例解析出当前查看的 NPC 角色 ID</summary>
+        /// <summary>
+        /// 从 TooltipBook 实例解析出当前查看的 NPC 角色 ID。
+        /// 用 _itemData.OwnerCharId（物品所属角色）。
+        /// 注意：不用 _charId——原版从不给 TooltipBook 的 _charId 赋值（恒为 0，死值）；
+        /// 也不用 CharacterMenu.CurCharacterId——那是顶部角色滚动条选中者，与具体物品解耦，
+        /// 在「查看不在队伍的人/列表第一项」时会错位取到列表第一个角色。
+        /// </summary>
         private static int ResolveNpcCharId(Component tooltipBook)
         {
             var itemDataObj = _fiItemData?.GetValue(tooltipBook);
-            int charId = _fiCharId != null ? (_fiCharId.GetValue(tooltipBook) as int? ?? -1) : -1;
-            int ownerCharId = (itemDataObj is ItemDisplayData id) ? id.OwnerCharId : -1;
-            return charId > 0 ? charId : ownerCharId;
+            return (itemDataObj is ItemDisplayData id) ? id.OwnerCharId : -1;
         }
 
         /// <summary>判断 charId 是否为太吾（主角）。主角进度由原版显示，本插件不处理</summary>
@@ -268,15 +312,17 @@ namespace AdjustMod
                 var pages = layoutPage.GetComponentsInChildren<Game.Views.MouseTips.Item.TooltipBookPage>(true);
                 if (pages == null) return;
 
+                // 不用 isActiveAndEnabled 过滤：首次悬停时本回调可能先于原版 OnGetPageInfo 激活页面，
+                // 若跳过未激活页会导致「列表第一项不显示已读未读」。GetComponentsInChildren(true) 已含未激活节点，
+                // 直接写 textIncompleteState 无害（后续重新渲染会重新追加或保持）。
                 for (int i = 0; i < pages.Length && i < readState.Length; i++)
                 {
-                    if (!pages[i].isActiveAndEnabled) continue;
                     ApplyTagToPage(pages[i], i, readState);
                 }
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] ApplyTagsToTooltip 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] ApplyTagsToTooltip 异常: {ex.Message}");
             }
         }
 
@@ -293,76 +339,62 @@ namespace AdjustMod
         }
 
         // ==============================
-        // Patch: UI_Make.SelectMakeItemSubType —— 制造面板选好装备子类型后，自动按规则填满材料
+        // Patch: MakeSubPageMake.ResetResourceCount —— 选材料后自动按规则填满资源
+        //
+        // 当前游戏版本（1.0.20.x）的制造 UI 走 Game.Views.Make.MakeSubPageMake（不是老的 UI_Make）。
+        // 选材料流程：OnItemClickMaterial → SelectMaterial → ResetResourceCount。
+        // ResetResourceCount 设上限(_maxMakeResourceCountInts/_maxMakeResourceTotalCount)、找出主材料类型
+        // (_mainRequiredResourceType=上限最高的，如玉石)、清零 _curMakeResourceCountInts。
+        // 多材料时原版默认把 cur 填成 _lastMakeResourceCountInts（首次为 0）→ 资源区全 0。这里覆盖为按规则填满。
         // ==============================
-        private static void SelectMakeItemSubType_Postfix(UI_Make __instance)
+        private static void ResetResourceCount_Postfix(Game.Views.Make.MakeSubPageMake __instance)
         {
+            if (!GetSettingBool("AutoFillCraftMaterial", true)) return;
             if (__instance == null) return;
             if (_refCurMakeResourceCountInts == null || _refMaxMakeResourceCountInts == null
-                || _refMaxMakeResourceTotalCount == null || _miCheckMakeCondition == null) return;
+                || _refMaxMakeResourceTotalCount == null || _miRefreshResourcePanel == null
+                || _refMainRequiredResourceType == null || _refLastMakeResourceCountInts == null) return;
 
             try
             {
-                // 原方法末尾用 CheckMakeCondition(needRefreshMakeResult:true, ()=>{ AutoFillResource(); }) 异步触发官方填充。
-                // 这里再挂一个回调：在官方 AutoFillResource(只填 Food/Herb) 跑完、且上限/数据就绪后，补填 Wood/Metal/Jade/Fabric。
-                // 不直接同步写——因为原方法的异步 RefreshMakeResult 还没回来，数据未定。
-                ScheduleCraftAutofill(__instance);
+                DoCraftAutofill(__instance);
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] SelectMakeItemSubType postfix 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] ResetResourceCount postfix 异常: {ex.Message}");
             }
         }
 
         /// <summary>
-        /// 挂一个延迟回调执行自动填充。通过调用游戏的 CheckMakeCondition(true, callback)，
-        /// 让 callback 在 RefreshMakeResult + OnCheckMakeCondition 完成后执行（此时数据/官方 AutoFill 都已就绪）。
-        /// </summary>
-        private static void ScheduleCraftAutofill(UI_Make make)
-        {
-            try
-            {
-                _miCheckMakeCondition.Invoke(make, new object[] { true, (Action)(() => DoCraftAutofill(make)) });
-            }
-            catch (Exception ex)
-            {
-                Debug.Log($"[{_modIdStr}] ScheduleCraftAutofill 异常: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// 自动填充核心：把 Wood/Metal/Fabric/Jade 按规则填满，Food/Herb 保留官方 AutoFill 的结果。
+        /// 自动填充核心：把非主材料(Wood/Metal/Fabric)填到各自类型上限，剩余额度全投主材料(_mainRequiredResourceType，如玉石)。
         ///
-        /// 规则：先把上限低的材料(Wood/Metal/Fabric)填到各自类型上限，剩余额度全投 Jade(上限最高的那个)。
-        /// 自己计算最终值并直接写入字段，不依赖游戏的总额钳制或隐藏削减逻辑。
-        /// 仓库不够时：实际可填量会被后续 CheckMakeCondition 的 UI 显示标红，但字段值仍按目标设；
-        /// 游戏提交制造时会用 CheckMakeResource 校验，不够则不让确认——这是可接受的(等同玩家手动填超量)。
+        /// 自己计算最终值并直接写入 _curMakeResourceCountInts 和 _lastMakeResourceCountInts（后者影响下次默认值），
+        /// 然后调 RefreshResourcePanel 刷新显示。
         /// </summary>
-        private static void DoCraftAutofill(UI_Make make)
+        private static void DoCraftAutofill(Game.Views.Make.MakeSubPageMake make)
         {
             try
             {
                 short maxTotal = _refMaxMakeResourceTotalCount(make);
                 ref var maxPerType = ref _refMaxMakeResourceCountInts(make);
                 ref var cur = ref _refCurMakeResourceCountInts(make);
+                ref var last = ref _refLastMakeResourceCountInts(make);
+                sbyte mainType = _refMainRequiredResourceType(make);
 
                 if (maxTotal <= 0) return;
 
-                // 材料索引：0=Food 1=Wood 2=Metal 3=Jade 4=Fabric 5=Herb
-                // 我们处理 1/2/4，再处理 3(Jade)。0/5(Food/Herb) 保留官方 AutoFill 的值。
-                // 先收集 Food/Herb 已投入量（官方 AutoFill 填的），它们占用总额度。
-                int reserved = cur.Get(0) + cur.Get(5);
-                int budget = maxTotal - reserved;   // 可分配给 Wood/Metal/Jade/Fabric 的额度
+                // 统计有上限的材料种类数；只有 1 种时原版已自动填满，不必干预。
+                int typeCount = 0;
+                for (sbyte t = 0; t < 6; t++) if (maxPerType.Get(t) > 0) typeCount++;
+                if (typeCount <= 1) return;
 
-                // 目标值数组，初始为 Food/Herb 当前值，其余清 0
                 var target = new int[6];
-                target[0] = cur.Get(0);
-                target[5] = cur.Get(5);
+                int budget = maxTotal;
 
-                // 步骤1：先填低上限的 Wood(1)/Metal(2)/Fabric(4)，各填到 min(类型上限, 剩余额度)
-                int[] order = { 1, 2, 4 };   // Wood, Metal, Fabric
-                foreach (int t in order)
+                // 步骤1：非主材料各填到 min(类型上限, 剩余额度)
+                for (sbyte t = 0; t < 6; t++)
                 {
+                    if (t == mainType) continue;
                     int cap = maxPerType.Get(t);
                     if (cap <= 0 || budget <= 0) { target[t] = 0; continue; }
                     int take = Math.Min(cap, budget);
@@ -370,29 +402,29 @@ namespace AdjustMod
                     budget -= take;
                 }
 
-                // 步骤2：剩余额度全给 Jade(3)（上限最高的那个）
+                // 步骤2：剩余额度全给主材料（_mainRequiredResourceType，上限最高的，如玉石）
+                if (budget > 0)
                 {
-                    int cap = maxPerType.Get(3);
-                    if (cap > 0 && budget > 0)
-                    {
-                        target[3] = Math.Min(cap, budget);
-                        budget -= target[3];
-                    }
-                    else target[3] = 0;
+                    int cap = maxPerType.Get(mainType);
+                    target[mainType] = cap > 0 ? Math.Min(cap, budget) : 0;
+                }
+                else target[mainType] = 0;
+
+                // 写入 cur 和 last（last 决定下次选同材料时的默认值）
+                for (int t = 0; t < 6; t++)
+                {
+                    cur.Set(t, target[t]);
+                    last.Set(t, target[t]);
                 }
 
-                // 写入字段（通过 ref 原地改 struct）
-                for (int t = 0; t < 6; t++)
-                    cur.Set(t, target[t]);
+                // 刷新显示
+                _miRefreshResourcePanel.Invoke(make, null);
 
-                // 刷新 UI 显示 + 制造结果预览。needRefreshMakeResult:true 重算成品预览。
-                _miCheckMakeCondition.Invoke(make, new object[] { true, null });
-
-                Debug.Log($"[{_modIdStr}] 制造自动填充：W{target[1]} M{target[2]} J{target[3]} Fb{target[4]} (Food{target[0]}/Herb{target[5]}), 总额上限={maxTotal}");
+                LogDebug($"制造自动填充：main={mainType}, 各类=[{target[0]},{target[1]},{target[2]},{target[3]},{target[4]},{target[5]}], 总额上限={maxTotal}");
             }
             catch (Exception ex)
             {
-                Debug.Log($"[{_modIdStr}] DoCraftAutofill 异常: {ex.Message}");
+                Debug.Log($"[{_logTag}] DoCraftAutofill 异常: {ex.Message}");
             }
         }
 
@@ -442,7 +474,7 @@ namespace AdjustMod
                 }
                 catch (Exception ex)
                 {
-                    Debug.Log($"[{_modIdStr}] NPC 阅读状态回调异常: {ex.Message}");
+                    Debug.Log($"[{_logTag}] NPC 阅读状态回调异常: {ex.Message}");
                 }
                 finally
                 {
