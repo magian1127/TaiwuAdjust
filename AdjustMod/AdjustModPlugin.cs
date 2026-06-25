@@ -3,9 +3,12 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using FrameWork;
+using FrameWork.UISystem.UIElements;
 using Game.Components.Common;
 using GameData.Domains.CombatSkill;
 using GameData.Domains.Item;
+using GameData.Domains.Map;
+using Game.Views.SkillBreak;
 using GameData.Domains.Item.Display;
 using GameData.Domains.Mod;
 using GameData.Serializer;
@@ -14,6 +17,7 @@ using HarmonyLib;
 using TaiwuModdingLib.Core.Plugin;
 using TMPro;
 using UnityEngine;
+using UnityEngine.UI;
 
 namespace AdjustMod
 {
@@ -68,6 +72,14 @@ namespace AdjustMod
         // outlinePageToggleGroup(总纲,CToggleGroup) / otherPageToggleGroup(篇章,CToggleGroupMultiSelect) 是 public 字段。
         private static AccessTools.FieldRef<CombatSkillPanel, CombatSkillPracticeDisplayData> _refPracticeSkillData;
 
+        // ---- 突破界面疗伤按钮 反射缓存 ----
+        // ViewCharacterMenuSkillBreakPlate（Game.Views.SkillBreak）是走格子的实际突破界面。
+        // patch InitRefers 创建「疗伤(N)」按钮，patch RefreshWithPlate 刷新 N。
+        // _taiwuCharId = 大夫=病患=主角。buttonClose 用于克隆按钮样式 + 取父 canvas。
+        private static AccessTools.FieldRef<ViewCharacterMenuSkillBreakPlate, int> _refTaiwuCharId;
+        // 每个突破界面实例 → 它的疗伤按钮 CButton（避免重复创建）
+        private static readonly Dictionary<ViewCharacterMenuSkillBreakPlate, CButton> _healButtons = new();
+
         public override void Initialize()
         {
             _modIdStr = ModIdStr;
@@ -115,7 +127,18 @@ namespace AdjustMod
             PatchMethod(harmony, typeof(CombatSkillPanel), "UpdateBreakPanel",
                 Type.EmptyTypes, breakPostfix);
 
-            Debug.Log($"[{_logTag}] 已加载 - TooltipBook / TooltipBookPage / MakeSubPageMake / CombatSkillPanel patch 完成");
+            // ---- 突破界面疗伤按钮：patch InitRefers(创建按钮) + RefreshWithPlate(刷新N) ----
+            InitHealButtonCaches();
+            var healInitPostfix = typeof(ModMain).GetMethod(nameof(SkillBreakPlate_InitRefers_Postfix), BF, null,
+                new[] { typeof(ViewCharacterMenuSkillBreakPlate) }, null);
+            PatchMethod(harmony, typeof(ViewCharacterMenuSkillBreakPlate), "InitRefers",
+                Type.EmptyTypes, healInitPostfix);
+            var healRefreshPostfix = typeof(ModMain).GetMethod(nameof(SkillBreakPlate_RefreshWithPlate_Postfix), BF, null,
+                new[] { typeof(ViewCharacterMenuSkillBreakPlate) }, null);
+            PatchMethod(harmony, typeof(ViewCharacterMenuSkillBreakPlate), "RefreshWithPlate",
+                new[] { typeof(GameData.Domains.Taiwu.SkillBreakPlate), typeof(Action) }, healRefreshPostfix);
+
+            Debug.Log($"[{_logTag}] 已加载 - TooltipBook / TooltipBookPage / MakeSubPageMake / CombatSkillPanel / 疗伤按钮 patch 完成");
         }
 
         /// <summary>初始化制造自动填充用的反射缓存（字段 ref + 方法）</summary>
@@ -148,6 +171,20 @@ namespace AdjustMod
             catch (Exception ex)
             {
                 Debug.Log($"[{_logTag}] 突破自动选择反射缓存初始化异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>初始化突破界面疗伤按钮的反射缓存</summary>
+        private static void InitHealButtonCaches()
+        {
+            try
+            {
+                _refTaiwuCharId = AccessTools.FieldRefAccess<ViewCharacterMenuSkillBreakPlate, int>("_taiwuCharId");
+                Debug.Log($"[{_logTag}] 疗伤按钮反射缓存：taiwuCharId={_refTaiwuCharId != null}");
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] 疗伤按钮反射缓存初始化异常: {ex.Message}");
             }
         }
 
@@ -529,6 +566,205 @@ namespace AdjustMod
                         otherTg.SelectWithoutNotify(pageId + 4);   // 逆练侧索引 5-9
                 }
                 LogDebug("突破自动选篇章完成（优先正练）");
+            }
+        }
+
+        // ==============================
+        // Patch: ViewCharacterMenuSkillBreakPlate.InitRefers / RefreshWithPlate —— 突破界面加「疗伤」按钮
+        //
+        // 在实际突破（走格子）界面加一个「疗伤」按钮：能治（有伤可治）就可点，不能治则灰色。
+        // 大夫=病患=太吾主角。点击调 MapDomainMethod.Call.HealOnMap 治一次伤势(typeInt=0)，然后重新模拟刷新可点状态。
+        // 完全照搬参考 MOD(AutoBreakFrontend) 方案：挂在 leftPanel 容器、左下角、TMP 字体从界面已有标签复制。
+        // ==============================
+        private static void SkillBreakPlate_InitRefers_Postfix(ViewCharacterMenuSkillBreakPlate __instance)
+        {
+            if (!GetSettingBool("AutoHealButton", true)) return;
+            if (__instance == null || _refTaiwuCharId == null) return;
+            if (_healButtons.ContainsKey(__instance)) return;   // 已创建过
+
+            try
+            {
+                CreateHealButton(__instance);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] 疗伤按钮创建异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>反射读取 ViewCharacterMenuSkillBreakPlate 的私有字段（值类型/引用类型通用）</summary>
+        private static T GetField<T>(ViewCharacterMenuSkillBreakPlate view, string fieldName) where T : class
+        {
+            return typeof(ViewCharacterMenuSkillBreakPlate)
+                .GetField(fieldName, BindingFlags.NonPublic | BindingFlags.Instance)
+                ?.GetValue(view) as T;
+        }
+
+        /// <summary>判定一个 TMP 是否可用作字体模板（有 font 且有 material）</summary>
+        private static bool IsValidFontSource(TextMeshProUGUI txt)
+        {
+            return txt != null && txt.font != null && txt.fontSharedMaterial != null;
+        }
+
+        /// <summary>从突破界面取一个可用的 TMP 当字体模板：优先 maxPowerLabel，否则在容器/界面里找一个</summary>
+        private static TextMeshProUGUI FindFontTemplate(ViewCharacterMenuSkillBreakPlate view, Transform container)
+        {
+            var primary = GetField<TextMeshProUGUI>(view, "maxPowerLabel");
+            if (IsValidFontSource(primary)) return primary;
+            if (container != null)
+            {
+                var found = container.GetComponentsInChildren<TextMeshProUGUI>(true).FirstOrDefault(IsValidFontSource);
+                if (found != null) return found;
+            }
+            return (view as Component).GetComponentsInChildren<TextMeshProUGUI>(true).FirstOrDefault(IsValidFontSource);
+        }
+
+        /// <summary>创建「疗伤」按钮：
+        /// 挂在 buttonClose 同父容器、放右上角关闭按钮左侧（大幅留白）、纯色矩形、TMP 字体从界面已有标签复制</summary>
+        private static void CreateHealButton(ViewCharacterMenuSkillBreakPlate view)
+        {
+            // 父容器：buttonClose 同父（确保按钮和关闭按钮在同一层级，坐标对齐）
+            var closeBtn = GetField<CButton>(view, "buttonClose");
+            if (closeBtn == null) { Debug.Log($"[{_logTag}] 疗伤按钮：找不到 buttonClose"); return; }
+            var closeRt = closeBtn.GetComponent<RectTransform>();
+            var containerRt = closeRt.parent;
+
+            // 字体模板：从界面已有的 TMP 标签复制 font/material/spriteAsset（关键，否则中文是空）
+            var fontSrc = FindFontTemplate(view, containerRt);
+            if (fontSrc == null) { Debug.Log($"[{_logTag}] 疗伤按钮：找不到可用字体模板 TMP"); return; }
+
+            // 纯色矩形按钮：GameObject + RectTransform + Image(纯色) + CButton
+            var go = new GameObject("AdjustMod_HealButton", typeof(RectTransform), typeof(Image), typeof(CButton));
+            go.transform.SetParent(containerRt, false);
+            var rt = go.GetComponent<RectTransform>();
+            rt.anchorMin = closeRt.anchorMin;
+            rt.anchorMax = closeRt.anchorMax;
+            rt.pivot = closeRt.pivot;
+            // 放在 buttonClose 左侧，中间留大量空白（向左偏移 220）
+            float myW = 120f;
+            rt.sizeDelta = new Vector2(myW, closeRt.sizeDelta.y);
+            float offsetX = -(closeRt.sizeDelta.x * 0.5f + myW * 0.5f + 220f);
+            rt.anchoredPosition = closeRt.anchoredPosition + new Vector2(offsetX, 0f);
+            // 置顶渲染，避免被遮挡
+            go.transform.SetAsLastSibling();
+
+            var img = go.GetComponent<Image>();
+            img.color = new Color(0.16f, 0.12f, 0.08f, 0.86f);   // 参考 MOD 的深色半透明
+            img.raycastTarget = true;
+
+            // CButton 配色（照搬参考 MOD 的 ColorBlock）
+            var btn = go.GetComponent<CButton>();
+            var cb = ColorBlock.defaultColorBlock;
+            cb.normalColor = new Color(0.16f, 0.12f, 0.08f, 0.86f);
+            cb.highlightedColor = new Color(0.3f, 0.23f, 0.15f, 0.96f);
+            cb.pressedColor = new Color(0.1f, 0.075f, 0.045f, 1f);
+            cb.selectedColor = cb.highlightedColor;
+            cb.disabledColor = new Color(0.1f, 0.1f, 0.1f, 0.45f);
+            cb.fadeDuration = 0.08f;
+            cb.colorMultiplier = 1f;
+            btn.transition = Selectable.Transition.ColorTint;
+            btn.colors = cb;
+            btn.targetGraphic = img;
+            btn.navigation = new Navigation { mode = Navigation.Mode.None };
+
+            // 子文本「疗伤」——必须复制字体模板的 font/material/spriteAsset，否则中文渲染不出来
+            var txtGo = new GameObject("Text", typeof(RectTransform));
+            txtGo.transform.SetParent(go.transform, false);
+            var txtRt = txtGo.GetComponent<RectTransform>();
+            txtRt.anchorMin = Vector2.zero; txtRt.anchorMax = Vector2.one;
+            txtRt.offsetMin = Vector2.zero; txtRt.offsetMax = Vector2.zero;
+            var txt = txtGo.AddComponent<TextMeshProUGUI>();
+            txt.text = "疗伤";
+            txt.alignment = TextAlignmentOptions.Center;
+            txt.fontSize = 22;
+            txt.color = Color.white;
+            txt.raycastTarget = false;
+            txt.font = fontSrc.font;
+            txt.fontSharedMaterial = fontSrc.fontSharedMaterial;
+            txt.spriteAsset = fontSrc.spriteAsset;
+
+            btn.ClearAndAddListener((Action)(() => OnHealButtonClick(view, btn)));
+            _healButtons[view] = btn;
+            // 初始按「不可点」显示，等 SimulateAndRefresh 回来再按真实状态切
+            SetHealButtonVisual(btn, false);
+            LogDebug($"疗伤按钮已创建（容器={containerRt.name}, 字体源={fontSrc.name}）");
+        }
+
+        /// <summary>根据可点状态切换疗伤按钮视觉：可点=亮底+金色字，不可点=暗底+灰字（差异明显）</summary>
+        private static void SetHealButtonVisual(CButton btn, bool canHeal)
+        {
+            if (btn == null) return;
+            // 背景直接着色（不走 interactable 的淡入淡出，状态切换更干脆）
+            var img = btn.targetGraphic as Image;
+            if (img != null)
+            {
+                img.color = canHeal
+                    ? new Color(0.24f, 0.40f, 0.26f, 0.92f)   // 可点：墨绿亮底
+                    : new Color(0.12f, 0.12f, 0.12f, 0.55f);  // 不可点：深灰暗底
+            }
+            // 文字颜色跟着切（这是差异最明显的点）
+            var txt = btn.GetComponentInChildren<TextMeshProUGUI>(true);
+            if (txt != null)
+            {
+                txt.color = canHeal
+                    ? new Color(1f, 0.92f, 0.55f)   // 可点：暖金色
+                    : new Color(0.45f, 0.45f, 0.45f); // 不可点：中灰
+            }
+        }
+
+        /// <summary>点击疗伤：治一次，然后重新模拟刷新可点状态</summary>
+        private static void OnHealButtonClick(ViewCharacterMenuSkillBreakPlate view, CButton btn)
+        {
+            try
+            {
+                int taiwuId = _refTaiwuCharId(view);
+                // needPay=true, payerId=taiwuId, isExpensiveHeal=false（普通疗伤，消耗药材不消耗额外金钱/恩义）
+                MapDomainMethod.Call.HealOnMap(view.Element.GameDataListenerId, 0, taiwuId, taiwuId, true, taiwuId, false);
+                LogDebug($"疗伤点击：HealOnMap(taiwu={taiwuId})");
+                // 治完后重新模拟刷新可点状态（有伤=可点，无伤=灰）
+                SimulateAndRefresh(view, btn);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] 疗伤点击异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>RefreshWithPlate postfix：突破板刷新时，重新模拟决定疗伤按钮可点/灰</summary>
+        private static void SkillBreakPlate_RefreshWithPlate_Postfix(ViewCharacterMenuSkillBreakPlate __instance)
+        {
+            if (!GetSettingBool("AutoHealButton", true)) return;
+            if (__instance == null) return;
+            if (!_healButtons.TryGetValue(__instance, out var btn) || btn == null) return;
+            SimulateAndRefresh(__instance, btn);
+        }
+
+        /// <summary>异步模拟疗伤消耗：HealEffect > 0（有伤可治）则按钮可点，否则灰</summary>
+        private static void SimulateAndRefresh(ViewCharacterMenuSkillBreakPlate view, CButton btn)
+        {
+            try
+            {
+                int taiwuId = _refTaiwuCharId(view);
+                MapDomainMethod.AsyncCall.SimulateHealCost(view, 0, taiwuId, taiwuId, true, false,
+                    (int offset, RawDataPool pool) =>
+                    {
+                        try
+                        {
+                            MapHealSimulateResult result = default;
+                            Serializer.Deserialize(pool, offset, ref result);
+                            // HealEffect > 0 = 有伤可治（资源是否够由 HealOnMap 后端处理，这里只判断有伤）
+                            bool canHeal = result.HealEffect > 0;
+                            btn.interactable = canHeal;
+                            // 可点/不可点视觉差异要明显：文字颜色 + 背景透明度都跟着切
+                            SetHealButtonVisual(btn, canHeal);
+                            LogDebug($"疗伤模拟：HealEffect={result.HealEffect} canHeal={canHeal}");
+                        }
+                        catch (Exception ex) { Debug.Log($"[{_logTag}] 疗伤模拟回调异常: {ex.Message}"); }
+                    });
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] SimulateAndRefresh 异常: {ex.Message}");
             }
         }
 

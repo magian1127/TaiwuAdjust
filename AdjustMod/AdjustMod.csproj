@@ -27,6 +27,14 @@
       <HintPath>$(ManagedDir)\GameData.Shared.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="GameData.Utilities">
+      <HintPath>$(ManagedDir)\GameData.Utilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
+    <Reference Include="GameData.Utilities.Structure">
+      <HintPath>$(ManagedDir)\GameData.Utilities.Structure.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="TaiwuModdingLib">
       <HintPath>$(ManagedDir)\TaiwuModdingLib.dll</HintPath>
       <Private>false</Private>
