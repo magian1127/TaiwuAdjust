@@ -3,6 +3,8 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Reflection;
 using FrameWork;
+using Game.Components.Common;
+using GameData.Domains.CombatSkill;
 using GameData.Domains.Item;
 using GameData.Domains.Item.Display;
 using GameData.Domains.Mod;
@@ -60,6 +62,12 @@ namespace AdjustMod
         private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, sbyte> _refMainRequiredResourceType;   // 主材料类型（上限最高的，如玉石）
         private static MethodInfo _miRefreshResourcePanel;   // MakeSubPageMake.RefreshResourcePanel() 刷新显示
 
+        // ---- 突破自动选择 反射缓存 ----
+        // CombatSkillPanel（Game.Components.Common）是修行界面里选功法后的总纲/篇章面板。
+        // _skillData.CombatSkillDisplayData.ReadingState（ushort 位掩码）= 各页是否已读：bit0-4 总纲, bit5-9 正练, bit10-14 逆练。
+        // outlinePageToggleGroup(总纲,CToggleGroup) / otherPageToggleGroup(篇章,CToggleGroupMultiSelect) 是 public 字段。
+        private static AccessTools.FieldRef<CombatSkillPanel, CombatSkillPracticeDisplayData> _refPracticeSkillData;
+
         public override void Initialize()
         {
             _modIdStr = ModIdStr;
@@ -98,7 +106,16 @@ namespace AdjustMod
             PatchMethod(harmony, typeof(Game.Views.Make.MakeSubPageMake), "ResetResourceCount",
                 Type.EmptyTypes, makePostfix);
 
-            Debug.Log($"[{_logTag}] 已加载 - TooltipBook / TooltipBookPage / MakeSubPageMake patch 完成");
+            // ---- 突破自动选择：patch CombatSkillPanel.UpdateBreakPlate ----
+            // 修行界面选功法后 CombatSkillPanel.Set 会刷新总纲/篇章面板。UpdateBreakPanel 用 activationState(未激活)算选中 → 空。
+            // 这里用 ReadingState(已读)自动补选：总纲没选则随机选已读的；篇章没选则优先正练。
+            InitBreakAutofillCaches();
+            var breakPostfix = typeof(ModMain).GetMethod(nameof(UpdateBreakPanel_Postfix), BF, null,
+                new[] { typeof(CombatSkillPanel) }, null);
+            PatchMethod(harmony, typeof(CombatSkillPanel), "UpdateBreakPanel",
+                Type.EmptyTypes, breakPostfix);
+
+            Debug.Log($"[{_logTag}] 已加载 - TooltipBook / TooltipBookPage / MakeSubPageMake / CombatSkillPanel patch 完成");
         }
 
         /// <summary>初始化制造自动填充用的反射缓存（字段 ref + 方法）</summary>
@@ -117,6 +134,20 @@ namespace AdjustMod
             catch (Exception ex)
             {
                 Debug.Log($"[{_logTag}] 制造自动填充反射缓存初始化异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>初始化突破自动选择用的反射缓存</summary>
+        private static void InitBreakAutofillCaches()
+        {
+            try
+            {
+                _refPracticeSkillData = AccessTools.FieldRefAccess<CombatSkillPanel, CombatSkillPracticeDisplayData>("_skillData");
+                Debug.Log($"[{_logTag}] 突破自动选择反射缓存：skillData={_refPracticeSkillData != null}");
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] 突破自动选择反射缓存初始化异常: {ex.Message}");
             }
         }
 
@@ -425,6 +456,79 @@ namespace AdjustMod
             catch (Exception ex)
             {
                 Debug.Log($"[{_logTag}] DoCraftAutofill 异常: {ex.Message}");
+            }
+        }
+
+        // ==============================
+        // Patch: CombatSkillPanel.UpdateBreakPanel —— 选功法后自动选总纲/正逆练篇章
+        //
+        // 修行界面选功法后 CombatSkillPanel.Set 调 UpdateBreakPanel 刷新总纲/篇章。
+        // 原版未突破时用 activationState(未激活)算选中 → 空。这里用 ReadingState(已读)自动补选。
+        // 位掩码：bit0-4 总纲, bit5-9 正练, bit10-14 逆练。
+        // ==============================
+        private static void UpdateBreakPanel_Postfix(CombatSkillPanel __instance)
+        {
+            if (!GetSettingBool("AutoBreakSelect", true)) return;
+            if (__instance == null) return;
+            if (_refPracticeSkillData == null) return;
+
+            try
+            {
+                DoBreakAutofill(__instance);
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{_logTag}] UpdateBreakPanel postfix 异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
+        /// 用 ReadingState(已读)自动选没选的总纲/篇章。规则：
+        ///   总纲没选 → 从已读的总纲(bit0-4)随机选一个；一个都没读 → return（不碰篇章）
+        ///   篇章没选 → 对 pageId 1-5 优先选正练已读(bit5-9)，否则逆练已读(bit10-14)
+        /// 已选的总纲/篇章不覆盖（尊重玩家手动选择）。
+        /// </summary>
+        private static void DoBreakAutofill(CombatSkillPanel panel)
+        {
+            var skillData = _refPracticeSkillData(panel);
+            if (skillData?.CombatSkillDisplayData == null) return;
+            ushort readingState = skillData.CombatSkillDisplayData.ReadingState;
+
+            var outlineTg = panel.outlinePageToggleGroup;   // CToggleGroup（单选）
+            var otherTg = panel.otherPageToggleGroup;       // CToggleGroupMultiSelect（多选）
+
+            // ---- 总纲：bit0-4，找已读的 ----
+            var readOutlines = new List<sbyte>();
+            for (sbyte i = 0; i < outlineTg.Count(); i++)
+            {
+                if (CombatSkillStateHelper.IsPageRead(readingState, CombatSkillStateHelper.GetOutlinePageInternalIndex(i)))
+                    readOutlines.Add(i);
+            }
+            // 一个总纲都没读 → 直接结束，不碰篇章
+            if (readOutlines.Count == 0) return;
+
+            // 总纲已选就不动（CToggleGroup.GetActiveIndex() >= 0 表示已选）
+            if (outlineTg.GetActiveIndex() < 0)
+            {
+                sbyte pick = readOutlines.Count == 1 ? readOutlines[0] : readOutlines[UnityEngine.Random.Range(0, readOutlines.Count)];
+                outlineTg.Set(pick);
+                LogDebug($"突破自动选总纲：index={pick}");
+            }
+
+            // ---- 篇章：pageId 1-5，正练 bit(5+i) 优先，否则逆练 bit(10+i) ----
+            // 篇章已选就不动（CToggleGroupMultiSelect 任一已选即跳过）
+            if (otherTg.GetIsOnCount() == 0)
+            {
+                for (byte pageId = 1; pageId <= 5; pageId++)
+                {
+                    byte directIdx = CombatSkillStateHelper.GetNormalPageInternalIndex(0, pageId);   // 正练 5-9
+                    byte reverseIdx = CombatSkillStateHelper.GetNormalPageInternalIndex(1, pageId);  // 逆练 10-14
+                    if (CombatSkillStateHelper.IsPageRead(readingState, directIdx))
+                        otherTg.SelectWithoutNotify(pageId - 1);   // toggle 索引 0-4 对应 pageId 1-5（正练侧）
+                    else if (CombatSkillStateHelper.IsPageRead(readingState, reverseIdx))
+                        otherTg.SelectWithoutNotify(pageId + 4);   // 逆练侧索引 5-9
+                }
+                LogDebug("突破自动选篇章完成（优先正练）");
             }
         }
 

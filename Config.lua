@@ -1,7 +1,7 @@
 return {
 	Title = "综合调整",
 	FileId = 3751327764,
-	Description = "太吾绘卷综合调整。\n\n当前功能：\n查看人物背包书籍时显示该人物的阅读完成状态。\n制造装备资源自动填充。\n\n后续调整看我玩游戏的情况会陆续添加。",
+	Description = "太吾绘卷综合调整。\n\n当前功能：\n查看人物背包书籍时显示该人物的阅读完成状态。\n制造装备资源自动填充。\n突破功法时自动选择总纲和正逆练篇章。\n\n后续调整看我玩游戏的情况会陆续添加。",
 	Cover = "Cover.jpg",
 	Author = "Magian",
 	BackendPlugins = {
@@ -29,13 +29,20 @@ return {
 		},
 		[3] = {
 			SettingType = "Toggle",
+			Key = "AutoBreakSelect",
+			DisplayName = "突破自动选择总纲",
+			Description = "突破功法时自动选择总纲和正逆练篇章（总纲随机选已读的，篇章优先正练）",
+			DefaultValue = true,
+		},
+		[4] = {
+			SettingType = "Toggle",
 			Key = "DebugMode",
 			DisplayName = "调试模式",
 			Description = "输出详细日志到Player.log用于排查问题",
 			DefaultValue = false,
 		},
 	},
-	Version = "1.0.0.0",
+	Version = "1.0.0.1",
 	TagList = {
 		[1] = "Optimizations",
 	},
