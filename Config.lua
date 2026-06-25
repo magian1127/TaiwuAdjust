@@ -9,6 +9,7 @@ return {
 突破功法时自动选择总纲和正逆练篇章。
 突破格子界面加了疗伤按钮
 
+每个功能都可以在模组设置中关闭
 后续调整看我玩游戏的情况会陆续添加。
 ]],
 	Cover = "Cover.jpg",
@@ -58,7 +59,7 @@ return {
 			DefaultValue = true,
 		},
 	},
-	Version = "1.0.0.1",
+	Version = "1.0.0.2",
 	TagList = {
 		[1] = "Optimizations",
 	},

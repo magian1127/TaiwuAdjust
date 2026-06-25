@@ -44,6 +44,7 @@ namespace AdjustMod
         /// <summary>正在进行的查询去重：[(npcCharId, bookId)]，避免同一目标重复发起后端调用</summary>
         private static readonly HashSet<long> _pendingQueries = new();
 
+        /// <summary>太吾生成的 modIdStr（"0_N" 格式，随加载顺序变化）。仅用于 Harmony Id / GetSetting / AddModMethod</summary>
         private static string _modIdStr = "";
 
         /// <summary>日志前缀（固定可读，与 modIdStr 解耦）。modIdStr 是太吾生成的 "0_N"，序号会变且不可读。</summary>
@@ -53,18 +54,26 @@ namespace AdjustMod
         private static FieldInfo _fiItemKey;
         private static FieldInfo _fiItemData;
         private static FieldInfo _fiCharId;
-        private static FieldInfo _fiLayoutPage;             // TooltipBook.layoutPage
-        private static FieldInfo _fiTextIncompleteState;    // TooltipBookPage.textIncompleteState（"完整/残缺"）
+        /// <summary>TooltipBook.layoutPage</summary>
+        private static FieldInfo _fiLayoutPage;
+        /// <summary>TooltipBookPage.textIncompleteState（"完整/残缺"）</summary>
+        private static FieldInfo _fiTextIncompleteState;
 
         // ---- 制造自动填充 反射缓存 ----
         // 当前游戏版本（1.0.20.x）的制造 UI 走 Game.Views.Make.MakeSubPageMake（不是老的 UI_Make）。
         // MakeSubPageMake 是 class，ResourceInts 是 struct。用 FieldRefAccess 拿 ref 才能原地改 struct 字段。
-        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, short> _refMaxMakeResourceTotalCount;   // 总物资上限
-        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refMaxMakeResourceCountInts;   // 各材料上限
-        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refCurMakeResourceCountInts;   // 当前投入量
-        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refLastMakeResourceCountInts;  // 上次投入量（影响下次默认值）
-        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, sbyte> _refMainRequiredResourceType;   // 主材料类型（上限最高的，如玉石）
-        private static MethodInfo _miRefreshResourcePanel;   // MakeSubPageMake.RefreshResourcePanel() 刷新显示
+        /// <summary>总物资上限</summary>
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, short> _refMaxMakeResourceTotalCount;
+        /// <summary>各材料上限</summary>
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refMaxMakeResourceCountInts;
+        /// <summary>当前投入量</summary>
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refCurMakeResourceCountInts;
+        /// <summary>上次投入量（影响下次默认值）</summary>
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, GameData.Domains.Character.ResourceInts> _refLastMakeResourceCountInts;
+        /// <summary>主材料类型（上限最高的，如玉石）</summary>
+        private static AccessTools.FieldRef<Game.Views.Make.MakeSubPageMake, sbyte> _refMainRequiredResourceType;
+        /// <summary>MakeSubPageMake.RefreshResourcePanel() 刷新显示</summary>
+        private static MethodInfo _miRefreshResourcePanel;
 
         // ---- 突破自动选择 反射缓存 ----
         // CombatSkillPanel（Game.Components.Common）是修行界面里选功法后的总纲/篇章面板。
@@ -77,9 +86,10 @@ namespace AdjustMod
         // patch InitRefers 创建「疗伤(N)」按钮，patch RefreshWithPlate 刷新 N。
         // _taiwuCharId = 大夫=病患=主角。buttonClose 用于克隆按钮样式 + 取父 canvas。
         private static AccessTools.FieldRef<ViewCharacterMenuSkillBreakPlate, int> _refTaiwuCharId;
-        // 每个突破界面实例 → 它的疗伤按钮 CButton（避免重复创建）
+        /// <summary>每个突破界面实例 → 它的疗伤按钮 CButton（避免重复创建）</summary>
         private static readonly Dictionary<ViewCharacterMenuSkillBreakPlate, CButton> _healButtons = new();
 
+        /// <summary>插件初始化：建立反射缓存，注册全部 Harmony postfix（书籍状态/制造填充/突破选择/疗伤按钮）</summary>
         public override void Initialize()
         {
             _modIdStr = ModIdStr;
@@ -188,6 +198,7 @@ namespace AdjustMod
             }
         }
 
+        /// <summary>通用 Harmony patch helper：按方法名+参数类型绑定指定重载，挂 postfix。找不到目标方法时打日志跳过</summary>
         private static void PatchMethod(Harmony harmony, Type type, string methodName, Type[] paramTypes, MethodInfo postfix)
         {
             try
@@ -207,6 +218,7 @@ namespace AdjustMod
             }
         }
 
+        /// <summary>插件卸载：清空阅读状态缓存与进行中的查询去重表</summary>
         public override void Dispose()
         {
             _readStateCache.Clear();
@@ -247,9 +259,7 @@ namespace AdjustMod
         /// <summary>组合 (charId, bookId) 为单个 long 作为去重键</summary>
         private static long MakeQueryKey(int charId, int bookId) => ((long)charId << 32) | (uint)bookId;
 
-        // ==============================
-        // Patch: TooltipBook.Refresh —— 检测 NPC 上下文，发起后端查询并缓存
-        // ==============================
+        /// <summary>Patch: TooltipBook.Refresh —— 检测 NPC 上下文，发起后端查询并缓存</summary>
         private static void TooltipBook_Refresh_Postfix(Game.Views.MouseTips.Item.TooltipBook __instance)
         {
             if (!GetSettingBool("BookReadStatus", true)) return;
@@ -284,10 +294,10 @@ namespace AdjustMod
             }
         }
 
-        // ==============================
-        // Patch: TooltipBookPage.Refresh —— 原版渲染完每页后，追加该 NPC 的阅读状态
-        // 参数 index 是页索引（0 起），用于定位 readState[index]
-        // ==============================
+        /// <summary>
+        /// Patch: TooltipBookPage.Refresh —— 原版渲染完每页后，追加该 NPC 的阅读状态。
+        /// 参数 index 是页索引（0 起），用于定位 readState[index]。
+        /// </summary>
         private static void TooltipBookPage_Refresh_Postfix(Game.Views.MouseTips.Item.TooltipBookPage __instance, int index)
         {
             if (!GetSettingBool("BookReadStatus", true)) return;
@@ -406,15 +416,15 @@ namespace AdjustMod
             return null;
         }
 
-        // ==============================
-        // Patch: MakeSubPageMake.ResetResourceCount —— 选材料后自动按规则填满资源
-        //
-        // 当前游戏版本（1.0.20.x）的制造 UI 走 Game.Views.Make.MakeSubPageMake（不是老的 UI_Make）。
-        // 选材料流程：OnItemClickMaterial → SelectMaterial → ResetResourceCount。
-        // ResetResourceCount 设上限(_maxMakeResourceCountInts/_maxMakeResourceTotalCount)、找出主材料类型
-        // (_mainRequiredResourceType=上限最高的，如玉石)、清零 _curMakeResourceCountInts。
-        // 多材料时原版默认把 cur 填成 _lastMakeResourceCountInts（首次为 0）→ 资源区全 0。这里覆盖为按规则填满。
-        // ==============================
+        /// <summary>
+        /// Patch: MakeSubPageMake.ResetResourceCount —— 选材料后自动按规则填满资源。
+        ///
+        /// 当前游戏版本（1.0.20.x）的制造 UI 走 Game.Views.Make.MakeSubPageMake（不是老的 UI_Make）。
+        /// 选材料流程：OnItemClickMaterial → SelectMaterial → ResetResourceCount。
+        /// ResetResourceCount 设上限(_maxMakeResourceCountInts/_maxMakeResourceTotalCount)、找出主材料类型
+        /// (_mainRequiredResourceType=上限最高的，如玉石)、清零 _curMakeResourceCountInts。
+        /// 多材料时原版默认把 cur 填成 _lastMakeResourceCountInts（首次为 0）→ 资源区全 0。这里覆盖为按规则填满。
+        /// </summary>
         private static void ResetResourceCount_Postfix(Game.Views.Make.MakeSubPageMake __instance)
         {
             if (!GetSettingBool("AutoFillCraftMaterial", true)) return;
@@ -496,13 +506,13 @@ namespace AdjustMod
             }
         }
 
-        // ==============================
-        // Patch: CombatSkillPanel.UpdateBreakPanel —— 选功法后自动选总纲/正逆练篇章
-        //
-        // 修行界面选功法后 CombatSkillPanel.Set 调 UpdateBreakPanel 刷新总纲/篇章。
-        // 原版未突破时用 activationState(未激活)算选中 → 空。这里用 ReadingState(已读)自动补选。
-        // 位掩码：bit0-4 总纲, bit5-9 正练, bit10-14 逆练。
-        // ==============================
+        /// <summary>
+        /// Patch: CombatSkillPanel.UpdateBreakPanel —— 选功法后自动选总纲/正逆练篇章。
+        ///
+        /// 修行界面选功法后 CombatSkillPanel.Set 调 UpdateBreakPanel 刷新总纲/篇章。
+        /// 原版未突破时用 activationState(未激活)算选中 → 空。这里用 ReadingState(已读)自动补选。
+        /// 位掩码：bit0-4 总纲, bit5-9 正练, bit10-14 逆练。
+        /// </summary>
         private static void UpdateBreakPanel_Postfix(CombatSkillPanel __instance)
         {
             if (!GetSettingBool("AutoBreakSelect", true)) return;
@@ -569,13 +579,13 @@ namespace AdjustMod
             }
         }
 
-        // ==============================
-        // Patch: ViewCharacterMenuSkillBreakPlate.InitRefers / RefreshWithPlate —— 突破界面加「疗伤」按钮
-        //
-        // 在实际突破（走格子）界面加一个「疗伤」按钮：能治（有伤可治）就可点，不能治则灰色。
-        // 大夫=病患=太吾主角。点击调 MapDomainMethod.Call.HealOnMap 治一次伤势(typeInt=0)，然后重新模拟刷新可点状态。
-        // 完全照搬参考 MOD(AutoBreakFrontend) 方案：挂在 leftPanel 容器、左下角、TMP 字体从界面已有标签复制。
-        // ==============================
+        /// <summary>
+        /// Patch: ViewCharacterMenuSkillBreakPlate.InitRefers —— 突破界面加「疗伤」按钮（RefreshWithPlate 负责刷新可点状态）。
+        ///
+        /// 在实际突破（走格子）界面加一个「疗伤」按钮：能治（有伤可治）就可点，不能治则灰色。
+        /// 大夫=病患=太吾主角。点击调 MapDomainMethod.Call.HealOnMap 治一次伤势(typeInt=0)，然后重新模拟刷新可点状态。
+        /// 按钮挂在 buttonClose 同父容器、放右上角关闭按钮左侧（中间留白），TMP 字体从界面已有标签复制。
+        /// </summary>
         private static void SkillBreakPlate_InitRefers_Postfix(ViewCharacterMenuSkillBreakPlate __instance)
         {
             if (!GetSettingBool("AutoHealButton", true)) return;
@@ -768,9 +778,7 @@ namespace AdjustMod
             }
         }
 
-        // ==============================
-        // 异步查询后端
-        // ==============================
+        /// <summary>异步查询后端：向 GameData 侧查某 NPC 对某书的阅读状态，回调里写缓存并补写 tooltip</summary>
         private static void QueryNpcBookReadState(Component tooltip, int npcCharId, ItemKey bookKey)
         {
             long queryKey = MakeQueryKey(npcCharId, bookKey.Id);
