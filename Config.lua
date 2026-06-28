@@ -8,6 +8,7 @@ return {
 制造装备资源自动填充。
 突破选功法时自动选择总纲和正逆练篇章。
 突破格子界面额外加了疗伤按钮。
+地图地块NPC列表悬停时默认显示互动信息（原版需按住Shift）。
 
 每个功能都可以在模组设置中关闭
 后续调整看我玩游戏的情况会陆续添加。
@@ -58,8 +59,15 @@ return {
 			Description = "在实际突破（走格子）界面加一个疗伤按钮，主角有伤可治时可点",
 			DefaultValue = true,
 		},
+		[6] = {
+			SettingType = "Toggle",
+			Key = "MapCharHoverInteraction",
+			DisplayName = "地块NPC悬停默认显示互动",
+			Description = "在地图地块的NPC列表上悬停时，默认直接显示互动信息（原版需按住Shift），按Alt看详细信息",
+			DefaultValue = true,
+		},
 	},
-	Version = "1.0.0.2",
+	Version = "1.0.0.3",
 	TagList = {
 		[1] = "Optimizations",
 	},

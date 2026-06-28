@@ -10,7 +10,7 @@ namespace AdjustModBackend
     /// <summary>
     /// 调整模块后端插件 - 提供 NPC 书籍阅读状态查询的 Mod 方法
     /// </summary>
-    [PluginConfig("AdjustModBackend", "adjust", "1.0.0.0")]
+    [PluginConfig("AdjustModBackend", "Magian", "1.0.0.0")]
     public class ModMain : TaiwuRemakePlugin
     {
         /// <summary>
