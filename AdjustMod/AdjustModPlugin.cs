@@ -19,11 +19,13 @@ namespace AdjustMod
     ///   3. 突破自动选择总纲 —— 自动选已读的总纲和正/逆练篇章
     ///   4. 突破界面疗伤按钮 —— 在走格子界面动态创建疗伤按钮
     ///   5. 地块NPC悬停默认互动 —— 地图 NPC 列表悬停即默认显示互动信息（原版需按住 Shift）
+    ///   6. 扁平标签栏 —— 角色界面底部标签展开为单排扁平标签，去掉所有二级悬停菜单。
+    ///      （人物→队伍/关押、武具→车马、造诣→技艺/武学、关系→族谱、见闻→秘闻）
     ///
     /// 插件生命周期：游戏加载 MOD 时调用 Initialize() → 运行期间响应玩家操作 → 卸载时调用 Dispose()。
     /// Harmony patch 在 Initialize() 中注册，通过 [HarmonyPatch] 特性自动发现。
     /// </summary>
-    [PluginConfig("AdjustMod", "adjust", "1.0.0.3")]
+    [PluginConfig("AdjustMod", "Magian", "1.0.0.4")]
     public class ModMain : TaiwuRemakePlugin
     {
         #region 全局共享状态
