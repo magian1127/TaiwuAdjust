@@ -21,11 +21,13 @@ namespace AdjustMod
     ///   5. 地块NPC悬停默认互动 —— 地图 NPC 列表悬停即默认显示互动信息（原版需按住 Shift）
     ///   6. 扁平标签栏 —— 角色界面底部标签展开为单排扁平标签，去掉所有二级悬停菜单。
     ///      （人物→队伍/关押、武具→车马、造诣→技艺/武学、关系→族谱、见闻→秘闻）
+    ///   7. 装备浮窗优化 —— 背包悬停装备时默认显示全部详情（原版需按住 Alt），
+    ///      隐藏热键提示，把注解面板移到详细信息下方（原版并排）。
     ///
     /// 插件生命周期：游戏加载 MOD 时调用 Initialize() → 运行期间响应玩家操作 → 卸载时调用 Dispose()。
     /// Harmony patch 在 Initialize() 中注册，通过 [HarmonyPatch] 特性自动发现。
     /// </summary>
-    [PluginConfig("AdjustMod", "Magian", "1.0.0.4")]
+    [PluginConfig("AdjustMod", "Magian", "1.0.0.5")]
     public class ModMain : TaiwuRemakePlugin
     {
         #region 全局共享状态
@@ -92,6 +94,7 @@ namespace AdjustMod
             BreakSelectPatch.Init();
             HealButtonPatch.Init();
             MapBlockCharHoverPatch.Init();
+            EquipTooltipPatch.Init();
 
             // 扫描所有 [HarmonyPatch] 特性的类，注册到 Harmony
             var harmony = new Harmony(ModIdStr);
