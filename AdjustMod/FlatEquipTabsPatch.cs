@@ -175,6 +175,8 @@ namespace AdjustMod
             int cloneIdx = 0;
             foreach (var (parentKey, subPages, labelKeys) in _parentDefs)
             {
+                // 安全检查：lookup 可能不含该键（FunctionLock 未解锁等）
+                if (!lookup.Contains(parentKey)) continue;
                 var parentRuntime = lookup[parentKey];
                 if (parentRuntime == null || _fTabRuntimeToggle == null) continue;
                 var parentToggle = _fTabRuntimeToggle.GetValue(parentRuntime) as CToggle;
@@ -183,7 +185,9 @@ namespace AdjustMod
                 int insertIdx = parentToggle.transform.GetSiblingIndex() + 1;
                 for (int s = 0; s < subPages.Length; s++)
                 {
-                    var label = LocalStringManager.Get(labelKeys[s]);
+                    // 直接使用硬编码文本，不依赖 LocalStringManager（语言包未加载时会炸）
+                    var label = GetLabelText(parentKey, s);
+
                     var clone = UnityEngine.Object.Instantiate(itemToggle.gameObject, parent);
                     clone.name = $"Flat_{label}";
                     clone.transform.SetSiblingIndex(insertIdx + s);
@@ -371,6 +375,22 @@ namespace AdjustMod
         #endregion
 
         #region 辅助方法
+
+        /// <summary>
+        /// 硬编码标签文本，不依赖 LocalStringManager 避免语言包加载时序问题。
+        /// </summary>
+        private static string GetLabelText(ECharacterSubToggleBase parentKey, int subIndex)
+        {
+            return parentKey switch
+            {
+                ECharacterSubToggleBase.CharacterBase => subIndex switch { 0 => "人物", 1 => "队伍", _ => "关押" },
+                ECharacterSubToggleBase.EquipmentBase => subIndex switch { 0 => "武具", _ => "车马" },
+                ECharacterSubToggleBase.AttainmentBase => subIndex switch { 0 => "造诣", 1 => "技艺", _ => "武学" },
+                ECharacterSubToggleBase.RelationshipBase => subIndex switch { 0 => "关系", _ => "族谱" },
+                ECharacterSubToggleBase.InformationBase => subIndex switch { 0 => "见闻", _ => "秘闻" },
+                _ => "?",
+            };
+        }
 
         /// <summary>
         /// 跳转到指定子页面。
