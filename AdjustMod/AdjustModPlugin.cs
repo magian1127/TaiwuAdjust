@@ -51,6 +51,19 @@ namespace AdjustMod
         internal static readonly HashSet<long> PendingQueries = new();
 
         /// <summary>
+        /// 设置项缓存（键 → bool 值）。
+        ///
+        /// 为什么需要缓存：
+        ///   游戏引擎在存档选择面板关闭时会调用 ModManager.Clear()，清空 _localMods 字典。
+        ///   ModManager.GetSetting 依赖 _localMods，之后调用全部返回 defaultValue。
+        ///   详见 dnSpy 反编译：UI_RecordSelect.OnDisable / UI_ModPanel.OnDisable → Clear()。
+        ///
+        /// 缓存策略：Initialize() 时预填充（此时 _localMods 可用），运行时只读缓存。
+        /// OnModSettingUpdate() 时刷新（设置被游戏内面板修改后触发）。
+        /// </summary>
+        private static readonly Dictionary<string, bool> _settingsCache = new();
+
+        /// <summary>
         /// 太吾生成的 Mod 标识字符串（格式 "0_N"，N 随加载顺序变化，不可读）。
         ///
         /// 用途：Harmony 实例的唯一 ID、ModManager.GetSetting 的 modId 参数、
@@ -75,18 +88,18 @@ namespace AdjustMod
         ///
         /// 执行顺序：
         ///   1. 缓存 ModIdStr → _modIdStr（后续 GetSetting / AddModMethod 需要）
-        ///   2. 各功能模块 Init()：建立反射缓存（FieldInfo / FieldRefAccess / MethodInfo），
+        ///   2. 预加载设置项缓存（此时 ModManager._localMods 可用）
+        ///   3. 各功能模块 Init()：建立反射缓存（FieldInfo / FieldRefAccess / MethodInfo），
         ///      缓存在 patch 触发前一次性建立，避免运行时重复反射的性能开销
-        ///   3. harmony.PatchAll()：扫描所有 [HarmonyPatch] 特性的类，注册 postfix/prefix
-        ///   4. 输出启动日志，确认 MOD 加载成功
-        ///
-        /// 为什么先 Init() 再 PatchAll()：Init() 中的反射缓存是 patch 运行时的前置依赖，
-        /// 如果缓存为 null，patch 会在运行时安全跳过（if (_ref == null) return），
-        /// 但不会报错——这比 patch 挂上但运行时抛异常更安全。
+        ///   4. harmony.PatchAll()：扫描所有 [HarmonyPatch] 特性的类，注册 postfix/prefix
+        ///   5. 输出启动日志，确认 MOD 加载成功
         /// </summary>
         public override void Initialize()
         {
             _modIdStr = ModIdStr;
+
+            // 预加载设置项缓存（此时 _localMods 可用，运行时会因 Clear() 被清空）
+            RefreshSettingsCache();
 
             // 各模块建立反射缓存（不注册 patch，只缓存 FieldInfo/MethodInfo）
             BookReadStatusPatch.Init();
@@ -101,6 +114,15 @@ namespace AdjustMod
             harmony.PatchAll();
 
             Debug.Log($"[{LogTag}] 已加载完成");
+        }
+
+        /// <summary>
+        /// 设置被修改时回调（游戏内 Mod 设置面板修改后触发）。
+        /// 刷新设置项缓存，使新设置即时生效。
+        /// </summary>
+        public override void OnModSettingUpdate()
+        {
+            RefreshSettingsCache();
         }
 
         /// <summary>
@@ -119,27 +141,60 @@ namespace AdjustMod
         #region 公共工具方法（供各 Patch 模块调用）
 
         /// <summary>
-        /// 读取 bool 类型的 Mod 设置项。
+        /// 刷新设置项缓存。从 ModManager 读取所有已知设置的当前值写入缓存。
         ///
-        /// 设计决策：每次 patch 触发时读，不缓存。原因：
-        ///   - ModManager.GetSetting 是字典查找，开销可忽略
-        ///   - 不缓存 = 玩家改设置后即时生效，无需重启或实现 OnModSettingUpdate 回调
-        ///   - 读不到（key 不存在或游戏未注入）时返回 defaultValue，保证功能可用
+        /// 调用时机：
+        ///   - Initialize() 中：此时 ModManager._localMods 可用，读取真实值。
+        ///   - OnModSettingUpdate() 中：游戏内设置面板修改设置后触发刷新。
+        ///
+        /// 为什么需要缓存：
+        ///   游戏引擎在存档选择面板关闭时会调用 ModManager.Clear()，清空 _localMods 字典。
+        ///   ModManager.GetSetting 依赖 _localMods，之后调用全部返回 defaultValue。
+        ///   通过缓存确保运行时设置值不依赖 _localMods 的存在。
         /// </summary>
-        /// <param name="key">设置项键名，对应 Config.lua → DefaultSettings 中的 Key</param>
-        /// <param name="defaultValue">读不到时的默认值</param>
-        /// <returns>设置值，或 defaultValue</returns>
-        internal static bool GetSettingBool(string key, bool defaultValue)
+        internal static void RefreshSettingsCache()
+        {
+            _settingsCache.Clear();
+            // 每个功能开关在 Config.lua → DefaultSettings 中有对应的 Key
+            CacheSetting("DebugMode", false);
+            CacheSetting("BookReadStatus", true);
+            CacheSetting("AutoFillCraftMaterial", true);
+            CacheSetting("AutoBreakSelect", true);
+            CacheSetting("AutoHealButton", true);
+            CacheSetting("MapCharHoverInteraction", true);
+            CacheSetting("FlatEquipTabs", true);
+            CacheSetting("EquipDetailDefault", true);
+        }
+
+        /// <summary>
+        /// 读取并缓存单个设置项。从 ModManager.GetSetting 读取，失败时用 defaultValue。
+        /// </summary>
+        private static void CacheSetting(string key, bool defaultValue)
         {
             try
             {
                 bool val = defaultValue;
-                return ModManager.GetSetting(_modIdStr, key, ref val) ? val : defaultValue;
+                _settingsCache[key] = ModManager.GetSetting(_modIdStr, key, ref val) ? val : defaultValue;
             }
             catch
             {
-                return defaultValue;
+                _settingsCache[key] = defaultValue;
             }
+        }
+
+        /// <summary>
+        /// 读取 bool 类型的 Mod 设置项。
+        ///
+        /// 从 _settingsCache 读取，缓存由 RefreshSettingsCache() 在 Initialize() 和
+        /// OnModSettingUpdate() 时填充。不直接调用 ModManager.GetSetting 的原因是
+        /// 游戏引擎会在存档选单关闭时清空 _localMods，导致 GetSetting 永远返回 defaultValue。
+        /// </summary>
+        /// <param name="key">设置项键名，对应 Config.lua → DefaultSettings 中的 Key</param>
+        /// <param name="defaultValue">缓存中不存在时的默认值（理论上不会出现）</param>
+        /// <returns>设置值，或 defaultValue</returns>
+        internal static bool GetSettingBool(string key, bool defaultValue)
+        {
+            return _settingsCache.TryGetValue(key, out bool cached) ? cached : defaultValue;
         }
 
         /// <summary>
