@@ -111,6 +111,7 @@ namespace AdjustMod
             MapBlockCharHoverPatch.Init();
             EquipTooltipPatch.Init();
             NeiliShockPatch.Init();
+            PopulationClickPatch.Init();
 
             // 扫描所有 [HarmonyPatch] 特性的类，注册到 Harmony
             var harmony = new Harmony(ModIdStr);
@@ -168,6 +169,7 @@ namespace AdjustMod
             CacheSetting("FlatEquipTabs", true);
             CacheSetting("EquipDetailDefault", true);
             CacheSetting("NeiliShock", true);
+            CacheSetting("PopulationClick", true);
         }
 
         /// <summary>

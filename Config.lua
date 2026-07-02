@@ -12,6 +12,7 @@ return {
 角色界面底部标签栏展开为单排扁平标签，去掉所有二级悬停菜单，设置需要重启。
 物品悬停默认显示全部详情（原版需按住Alt），悬浮的注解下移。
 战斗准备界面加内力震慑按钮，精纯高于对方时，可扣内力直接战斗胜利。
+点击右上角村名人数可直接打开村民名册。
 
 每个功能都可以在模组设置中关闭
 后续调整看我玩游戏的情况会陆续添加。
@@ -93,8 +94,15 @@ https://github.com/magian1127/TaiwuAdjust
 			Description = "战斗准备界面加内力震慑按钮，主角精纯高于对方时可扣内力（敌方现有真气/10）直接战斗胜利（走正常结算）",
 			DefaultValue = true,
 		},
+		[10] = {
+			SettingType = "Toggle",
+			Key = "PopulationClick",
+			DisplayName = "点击村名人数打开名册",
+			Description = "点击右上角村名人数或图标直接打开村民名册",
+			DefaultValue = true,
+		},
 	},
-	Version = "1.0.0.6",
+	Version = "1.0.0.7",
 	TagList = {
 		[1] = "Optimizations",
 	},
