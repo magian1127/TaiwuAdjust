@@ -13,6 +13,7 @@ return {
 物品悬停默认显示全部详情（原版需按住Alt），悬浮的注解下移。
 战斗准备界面加内力震慑按钮，精纯高于对方时，可扣内力直接战斗胜利。
 点击右上角村名人数可直接打开村民名册。
+地块人物列表可按数字键 1-9 快速对话。
 
 每个功能都可以在模组设置中关闭
 后续调整看我玩游戏的情况会陆续添加。
@@ -101,8 +102,15 @@ https://github.com/magian1127/TaiwuAdjust
 			Description = "点击右上角村名人数或图标直接打开村民名册",
 			DefaultValue = true,
 		},
+		[11] = {
+			SettingType = "Toggle",
+			Key = "MapBlockCharShortcut",
+			DisplayName = "地块人物列表快捷键",
+			Description = "在地块左侧人物列表中按数字键 1-9 可直接对话对应角色",
+			DefaultValue = true,
+		},
 	},
-	Version = "1.0.0.7",
+	Version = "1.0.0.8",
 	TagList = {
 		[1] = "Optimizations",
 	},
