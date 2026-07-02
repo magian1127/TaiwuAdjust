@@ -1,7 +1,8 @@
 <Solution>
-  <Project Path="AdjustMod/AdjustMod.csproj" />
-  <Project Path="AdjustModBackend/AdjustModBackend.csproj" />
   <Folder Name="/Solution Items/">
     <File Path="Config.lua" />
+    <File Path="README.md" />
   </Folder>
+  <Project Path="AdjustMod/AdjustMod.csproj" />
+  <Project Path="AdjustModBackend/AdjustModBackend.csproj" />
 </Solution>
