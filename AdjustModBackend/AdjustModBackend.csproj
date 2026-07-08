@@ -25,6 +25,10 @@
       <HintPath>$(GameDir)\Backend\GameData.Shared.dll</HintPath>
       <Private>false</Private>
     </Reference>
+    <Reference Include="GameData.Utilities">
+      <HintPath>$(GameDir)\Backend\GameData.Utilities.dll</HintPath>
+      <Private>false</Private>
+    </Reference>
     <Reference Include="TaiwuModdingLib">
       <HintPath>$(GameDir)\Backend\TaiwuModdingLib.dll</HintPath>
       <Private>false</Private>

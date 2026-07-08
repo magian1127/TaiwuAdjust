@@ -17,13 +17,15 @@ namespace AdjustMod
     ///   1. NPC 书籍阅读状态 —— 悬停 NPC 背包书籍时显示"此人已读/未读"
     ///   2. 制造自动填充资源 —— 选好装备材料后自动分配各类资源到上限
     ///   3. 突破自动选择总纲 —— 自动选已读的总纲和正/逆练篇章
-    ///   4. 突破界面疗伤按钮 —— 在走格子界面动态创建疗伤按钮
-    ///   5. 地块NPC悬停默认互动 —— 地图 NPC 列表悬停即默认显示互动信息（原版需按住 Shift）
-    ///   6. 扁平标签栏 —— 角色界面底部标签展开为单排扁平标签，去掉所有二级悬停菜单。
+    ///   4. 突破「可突破」筛选 —— 修行/突破界面筛选面板的「功法状态」菜单追加「可突破」选项，
+    ///      勾选后只列出当前可突破的功法（替代旧的置顶排序方案，避免滚动跳动）
+    ///   5. 突破界面疗伤按钮 —— 在走格子界面动态创建疗伤按钮
+    ///   6. 地块NPC悬停默认互动 —— 地图 NPC 列表悬停即默认显示互动信息（原版需按住 Shift）
+    ///   7. 扁平标签栏 —— 角色界面底部标签展开为单排扁平标签，去掉所有二级悬停菜单。
     ///      （人物→队伍/关押、武具→车马、造诣→技艺/武学、关系→族谱、见闻→秘闻）
-    ///   7. 装备浮窗优化 —— 背包悬停装备时默认显示全部详情（原版需按住 Alt），
+    ///   8. 装备浮窗优化 —— 背包悬停装备时默认显示全部详情（原版需按住 Alt），
     ///      隐藏热键提示，把注解面板移到详细信息下方（原版并排）。
-    ///   8. 战斗准备内力震慑 —— 战斗准备界面加「内力震慑」按钮，
+    ///   9. 战斗准备内力震慑 —— 战斗准备界面加「内力震慑」按钮，
     ///      主角精纯高于对方时可扣内力（敌方现有真气/10）直接战斗胜利（走正常结算）。
     ///
     /// 插件生命周期：游戏加载 MOD 时调用 Initialize() → 运行期间响应玩家操作 → 卸载时调用 Dispose()。
@@ -113,6 +115,8 @@ namespace AdjustMod
             NeiliShockPatch.Init();
             PopulationClickPatch.Init();
             MapBlockCharShortcutPatch.Init();
+            CombatSkillTooltipPatch.Init();
+            ItemMaterialHintPatch.Init();
 
             // 扫描所有 [HarmonyPatch] 特性的类，注册到 Harmony
             var harmony = new Harmony(ModIdStr);
@@ -136,6 +140,16 @@ namespace AdjustMod
         /// Harmony patch 由游戏进程自动回收，无需手动 UnpatchAll。
         /// </summary>
         public override void Dispose()
+        {
+            ReadStateCache.Clear();
+            PendingQueries.Clear();
+        }
+
+        /// <summary>
+        /// 读档/进入新存档时回调。清空 NPC 阅读状态缓存——
+        /// 换档后 NPC、书籍都不同了，旧缓存无意义。
+        /// </summary>
+        public override void OnEnterNewWorld()
         {
             ReadStateCache.Clear();
             PendingQueries.Clear();
@@ -172,6 +186,7 @@ namespace AdjustMod
             CacheSetting("NeiliShock", true);
             CacheSetting("PopulationClick", true);
             CacheSetting("MapBlockCharShortcut", true);
+            CacheSetting("MaterialTipHint", true);
         }
 
         /// <summary>

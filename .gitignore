@@ -12,3 +12,5 @@ Plugins/
 
 # Settings.Lua 由游戏首次加载 MOD 时自动生成（玩家设置），源码项目不含、不提交
 Settings.Lua
+
+/.codegraph

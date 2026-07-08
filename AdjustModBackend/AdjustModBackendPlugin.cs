@@ -1,14 +1,19 @@
 using System;
+using System.Collections.Generic;
+using Config;
 using GameData.Common;
 using GameData.Domains;
+using GameData.Domains.Building;
 using GameData.Domains.Item;
+using GameData.Domains.Map;
 using GameData.Domains.Mod;
+using GameData.Utilities;
 using TaiwuModdingLib.Core.Plugin;
 
 namespace AdjustModBackend
 {
     /// <summary>
-    /// 调整模块后端插件 - 提供 NPC 书籍阅读状态查询的 Mod 方法
+    /// 调整模块后端插件 - 提供 NPC 书籍阅读状态查询、心材已建造建筑数统计的 Mod 方法
     /// </summary>
     [PluginConfig("AdjustModBackend", "Magian", "1.0.0.0")]
     public class ModMain : TaiwuRemakePlugin
@@ -22,6 +27,11 @@ namespace AdjustModBackend
                 ModIdStr,
                 "GetNpcBookReadState",
                 new Func<DataContext, SerializableModData, SerializableModData>(HandleGetNpcBookReadState)
+            );
+            DomainManager.Mod.AddModMethod(
+                ModIdStr,
+                "CountBuildingsRequiringMaterial",
+                new Func<DataContext, SerializableModData, SerializableModData>(HandleCountBuildingsRequiringMaterial)
             );
         }
 
@@ -73,6 +83,47 @@ namespace AdjustModBackend
                 {
                     result.Set("p" + i.ToString(), readState[i]);
                 }
+            }
+            catch (Exception ex)
+            {
+                result.Set("success", false);
+                result.Set("error", ex.Message);
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// 处理"统计依赖指定心材的已建造建筑数量"的 Mod 方法调用
+        /// </summary>
+        /// <param name="context">数据上下文</param>
+        /// <param name="param">参数：materialTemplateId(int) 心材的模板 ID</param>
+        /// <returns>返回：success(bool), count(int) 太吾村中需要该心材的已建造建筑数</returns>
+        private static SerializableModData HandleCountBuildingsRequiringMaterial(DataContext context, SerializableModData param)
+        {
+            var result = new SerializableModData();
+
+            if (!param.Get("materialTemplateId", out int materialTemplateId))
+                return Fail(result, "Missing materialTemplateId");
+
+            try
+            {
+                Location taiwuLocation = DomainManager.Taiwu.GetTaiwuVillageLocation();
+                List<BuildingBlockData> blocks = DomainManager.Building.GetBuildingBlockList(taiwuLocation);
+
+                int count = 0;
+                foreach (var block in blocks)
+                {
+                    if (block.TemplateId <= 0) continue;
+                    var config = BuildingBlock.Instance[block.TemplateId];
+                    if (config != null && config.BuildingCoreItem == (short)materialTemplateId)
+                    {
+                        count++;
+                    }
+                }
+
+                result.Set("success", true);
+                result.Set("count", count);
             }
             catch (Exception ex)
             {
