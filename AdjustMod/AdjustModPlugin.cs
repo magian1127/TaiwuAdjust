@@ -31,7 +31,7 @@ namespace AdjustMod
     /// 插件生命周期：游戏加载 MOD 时调用 Initialize() → 运行期间响应玩家操作 → 卸载时调用 Dispose()。
     /// Harmony patch 在 Initialize() 中注册，通过 [HarmonyPatch] 特性自动发现。
     /// </summary>
-    [PluginConfig("AdjustMod", "Magian", "1.0.0.6")]
+    [PluginConfig("AdjustMod", "Magian", "1.0.0.9")]
     public class ModMain : TaiwuRemakePlugin
     {
         #region 全局共享状态
@@ -65,6 +65,17 @@ namespace AdjustMod
         /// 设为 5 秒留足余量（正常 RPC 往返通常在百毫秒级）。
         /// </summary>
         internal const float QueryTimeoutSeconds = 5f;
+
+        /// <summary>
+        /// 借出的物品 Id 集合（前端缓存）。
+        ///
+        /// 后端的 SerializableModData 是借用记录的权威源，本集合只是加速判断：
+        /// TransferItem prefix 先查本集合做 O(1) 快速判断，命中才走借用取回流程。
+        ///
+        /// 缓存生命周期：借出成功时 Add，取回成功时 Remove，读档/换档时 Clear。
+        /// 读档后本集合为空，首次取回借出物可能误走原版（扣一次好感）——可接受的退化。
+        /// </summary>
+        internal static readonly HashSet<int> BorrowedItems = new();
 
         /// <summary>
         /// 设置项缓存（键 → bool 值）。
@@ -129,6 +140,7 @@ namespace AdjustMod
             MapBlockCharShortcutPatch.Init();
             CombatSkillTooltipPatch.Init();
             ItemMaterialHintPatch.Init();
+            BorrowItemPatch.Init();
 
             // 扫描所有 [HarmonyPatch] 特性的类，注册到 Harmony
             var harmony = new Harmony(ModIdStr);
@@ -155,6 +167,7 @@ namespace AdjustMod
         {
             ReadStateCache.Clear();
             PendingQueries.Clear();
+            BorrowedItems.Clear();
         }
 
         /// <summary>
@@ -165,6 +178,9 @@ namespace AdjustMod
         {
             ReadStateCache.Clear();
             PendingQueries.Clear();
+            BorrowedItems.Clear();
+            // 标记借出记录缓存为 stale，下次打开物品菜单时从后端同步
+            BorrowItemPatch.MarkCacheStale();
         }
 
         #endregion
@@ -199,6 +215,7 @@ namespace AdjustMod
             CacheSetting("PopulationClick", true);
             CacheSetting("MapBlockCharShortcut", true);
             CacheSetting("MaterialTipHint", true);
+            CacheSetting("BorrowItem", true);
         }
 
         /// <summary>

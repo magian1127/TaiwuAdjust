@@ -17,6 +17,7 @@ return {
 点击右上角村名人数可直接打开村民名册。
 地块左侧列表可按数字键 1-9 快速对话。
 心材悬浮信息显示已建造数。
+书籍/装备可借用给队友（不增加好感度和警觉度，取回也不减少）。
 
 每个功能都可以在模组设置中关闭
 后续调整看我玩游戏的情况会陆续添加。
@@ -119,8 +120,15 @@ https://github.com/magian1127/TaiwuAdjust
 			Description = "悬停心材类物品时，在浮窗属性网格额外显示太吾村中需要该心材的已建造建筑数（含0）",
 			DefaultValue = true,
 		},
-	},
-	Version = "1.0.0.8",
+		{
+			SettingType = "Toggle",
+			Key = "BorrowItem",
+			DisplayName = "物品借用",
+			Description = "书籍/装备操作菜单的转赠下方新增「借用」选项，借给队友不增加好感度和警觉度，取回借出物也不减少好感度",
+			DefaultValue = true,
+		},
+		},
+	Version = "1.0.0.9",
 	TagList = {
 		[1] = "Optimizations",
 	},
