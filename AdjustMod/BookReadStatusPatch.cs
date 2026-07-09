@@ -95,6 +95,10 @@ namespace AdjustMod
                 BindingFlags.NonPublic | BindingFlags.Instance);
             _fiTextIncompleteState = typeof(Game.Views.MouseTips.Item.TooltipBookPage).GetField("textIncompleteState",
                 BindingFlags.NonPublic | BindingFlags.Instance);
+
+            Debug.Log($"[{ModMain.LogTag}] 书籍阅读状态反射缓存：" +
+                $"itemKey={_fiItemKey != null}, itemData={_fiItemData != null}, " +
+                $"layoutPage={_fiLayoutPage != null}, textIncompleteState={_fiTextIncompleteState != null}");
         }
 
         #endregion
@@ -139,9 +143,17 @@ namespace AdjustMod
                     return;
                 }
 
-                // 去重：同一 (NPC, 书) 只允许一次查询，回调完成后移除
+                // 去重（带超时自愈）：同一 (NPC, 书) 查询进行中则跳过，避免重复发起异步调用。
+                // 先清理超过阈值的过期条目——实测某些书的 RPC 回调偶发不返回，
+                // 若不清理，去重键会永久卡住，导致该书再也查不到、永远不显示标签。
                 long queryKey = ModMain.MakeQueryKey(npcCharId, bookKey.Id);
-                if (ModMain.PendingQueries.Contains(queryKey)) return;
+                PurgeExpiredQueries();
+                if (ModMain.PendingQueries.ContainsKey(queryKey))
+                {
+                    ModMain.LogDebug($"书籍阅读状态：查询进行中，跳过 npc={npcCharId} bookId={bookKey.Id}");
+                    return;
+                }
+                ModMain.LogDebug($"书籍阅读状态：发起查询 npc={npcCharId} bookId={bookKey.Id} ({bookKey})");
                 QueryNpcBookReadState(__instance, npcCharId, bookKey);
             }
             catch (Exception ex)
@@ -210,6 +222,37 @@ namespace AdjustMod
         #endregion
 
         #region 辅助方法
+
+        /// <summary>
+        /// 清理 PendingQueries 中超过超时阈值的条目。
+        ///
+        /// 实测某些书的后端 RPC 回调偶发不返回（疑似跨进程通道丢失），导致去重键永久卡住。
+        /// 本方法在每次发起查询前调用，把超时未收到回调的键视为丢失并移除，
+        /// 让下次悬停该书时能重新发起查询，实现自愈。
+        /// </summary>
+        private static void PurgeExpiredQueries()
+        {
+            if (ModMain.PendingQueries.Count == 0) return;
+            float now = Time.realtimeSinceStartup;
+            // 由于遍历中删除，先收集过期键再移除，避免修改集合异常
+            List<long>? expired = null;
+            foreach (var kv in ModMain.PendingQueries)
+            {
+                if (now - kv.Value > ModMain.QueryTimeoutSeconds)
+                {
+                    expired ??= new List<long>();
+                    expired.Add(kv.Key);
+                }
+            }
+            if (expired != null)
+            {
+                foreach (long key in expired)
+                {
+                    ModMain.PendingQueries.Remove(key);
+                }
+                ModMain.LogDebug($"书籍阅读状态：清理 {expired.Count} 个超时未回调的查询（>{ModMain.QueryTimeoutSeconds}s）");
+            }
+        }
 
         /// <summary>
         /// 从 TooltipBook 实例解析当前查看的 NPC 角色 ID。
@@ -341,7 +384,8 @@ namespace AdjustMod
         internal static void QueryNpcBookReadState(Component tooltip, int npcCharId, ItemKey bookKey)
         {
             long queryKey = ModMain.MakeQueryKey(npcCharId, bookKey.Id);
-            ModMain.PendingQueries.Add(queryKey);
+            // 记录发起时刻，供 PurgeExpiredQueries 判断是否超时
+            ModMain.PendingQueries[queryKey] = Time.realtimeSinceStartup;
 
             // 构造参数：ItemKey 拆成 4 个 int 字段传递（跨进程安全）
             var param = new SerializableModData();
@@ -355,25 +399,53 @@ namespace AdjustMod
             {
                 try
                 {
-                    if (resultCode >= 0)
+                    if (resultCode < 0)
                     {
-                        SerializableModData? result = null;
-                        SerializerHolder<SerializableModData>.Deserialize(resultPool, resultCode, ref result!);
-                        if (result != null &&
-                            result.Get("success", out bool success) && success &&
-                            result.Get("pageCount", out int pageCount) && pageCount > 0)
-                        {
-                            // 从结果中提取每页的阅读状态
-                            var readState = new bool[pageCount];
-                            for (int i = 0; i < pageCount; i++)
-                                result.Get("p" + i.ToString(), out readState[i]);
-
-                            // 写入缓存：后续重渲染时第二层 postfix 可直接读取
-                            if (!ModMain.ReadStateCache.ContainsKey(npcCharId))
-                                ModMain.ReadStateCache[npcCharId] = new Dictionary<int, bool[]>();
-                            ModMain.ReadStateCache[npcCharId][bookKey.Id] = readState;
-                        }
+                        // resultCode < 0 通常表示后端调用失败/超时/方法未注册
+                        Debug.Log($"[{ModMain.LogTag}] 书籍阅读状态回调失败：resultCode={resultCode} " +
+                            $"npc={npcCharId} bookId={bookKey.Id}");
+                        return;
                     }
+
+                    SerializableModData? result = null;
+                    SerializerHolder<SerializableModData>.Deserialize(resultPool, resultCode, ref result!);
+
+                    if (result == null)
+                    {
+                        Debug.Log($"[{ModMain.LogTag}] 书籍阅读状态回调：反序列化结果为 null " +
+                            $"npc={npcCharId} bookId={bookKey.Id}");
+                        return;
+                    }
+
+                    if (!result.Get("success", out bool success) || !success)
+                    {
+                        result.Get("error", out string err);
+                        Debug.Log($"[{ModMain.LogTag}] 书籍阅读状态回调：后端返回失败 " +
+                            $"npc={npcCharId} bookId={bookKey.Id} error={err}");
+                        return;
+                    }
+
+                    result.Get("pageCount", out int pageCount);
+                    if (pageCount <= 0)
+                    {
+                        ModMain.LogDebug($"书籍阅读状态回调：pageCount=0 npc={npcCharId} bookId={bookKey.Id}");
+                        return;
+                    }
+
+                    // 从结果中提取每页的阅读状态
+                    var readState = new bool[pageCount];
+                    for (int i = 0; i < pageCount; i++)
+                        result.Get("p" + i.ToString(), out readState[i]);
+
+                    // 写入缓存：后续重渲染时第二层 postfix 可直接读取
+                    if (!ModMain.ReadStateCache.ContainsKey(npcCharId))
+                        ModMain.ReadStateCache[npcCharId] = new Dictionary<int, bool[]>();
+                    ModMain.ReadStateCache[npcCharId][bookKey.Id] = readState;
+
+                    int readCount = 0;
+                    for (int i = 0; i < readState.Length; i++) if (readState[i]) readCount++;
+                    ModMain.LogDebug($"书籍阅读状态回调成功：npc={npcCharId} bookId={bookKey.Id} " +
+                        $"pages={pageCount} 已读={readCount}");
 
                     // 补写首次悬停时的数据空窗期：
                     // 此时游戏的 OnGetPageInfo 已渲染好页面，但缓存还没数据所以第二层 postfix 跳过了。

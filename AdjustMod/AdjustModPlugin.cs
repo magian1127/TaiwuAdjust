@@ -47,12 +47,24 @@ namespace AdjustMod
         internal static readonly Dictionary<int, Dictionary<int, bool[]>> ReadStateCache = new();
 
         /// <summary>
-        /// 正在进行的后端查询去重表：存储 (npcCharId, bookId) 组合的 long 键。
+        /// 正在进行的后端查询去重表：(npcCharId, bookId) 组合的 long 键 → 发起查询时的 Time.realtimeSinceStartup。
         ///
-        /// 同一 (NPC, 书) 只允许发起一次后端查询。TooltipBook.Refresh 触发时先查此表，
-        /// 已在查询中则跳过，避免重复发起异步调用。查询回调完成后由 finally 块移除。
+        /// 同一 (NPC, 书) 在一次查询进行中只允许发起一次，避免重复发起异步调用。
+        /// 查询回调完成后由 finally 块移除。
+        ///
+        /// 【为什么用时间戳而非 HashSet】
+        /// 实测某些书的后端 RPC 回调偶发不返回（疑似跨进程通道丢失），导致去重键永远卡在表里，
+        /// 以后每次悬停该书都被「正在查询中」拦截，永远不再重试 → 该书永久不显示标签。
+        /// 改为存时间戳：发起前先清理超过 <see cref="QueryTimeoutSeconds"/> 的过期条目，
+        /// 让卡死的查询能自动放行、重新发起，实现自愈。
         /// </summary>
-        internal static readonly HashSet<long> PendingQueries = new();
+        internal static readonly Dictionary<long, float> PendingQueries = new();
+
+        /// <summary>
+        /// 查询超时阈值（秒）。超过此时间仍未收到回调的去重键视为丢失，允许重新发起查询。
+        /// 设为 5 秒留足余量（正常 RPC 往返通常在百毫秒级）。
+        /// </summary>
+        internal const float QueryTimeoutSeconds = 5f;
 
         /// <summary>
         /// 设置项缓存（键 → bool 值）。
