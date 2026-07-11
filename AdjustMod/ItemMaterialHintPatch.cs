@@ -41,8 +41,10 @@ namespace AdjustMod
         private static FieldInfo? _fiCommonArea;       // TooltipItemBase.commonArea
         private static FieldInfo? _fiTextWeight;       // TooltipItemCommonArea.textWeight（重量格的 label，用于定位 GridLayoutGroup）
 
-        /// <summary>有建筑依赖的心材 TemplateId 集合（静态配置，仅构建一次）</summary>
-        private static HashSet<short>? _materialsWithBuildings;
+        /// <summary>有建筑依赖的心材 TemplateKey 集合（静态配置，仅构建一次）。
+        /// 用 TemplateKey(ItemType+TemplateId) 而非单纯 TemplateId，避免不同物品类型
+        /// （如护具 ItemType=1、宝物 ItemType=2）与心材 ItemType=12 的 TemplateId 数值撞车误判。</summary>
+        private static HashSet<TemplateKey>? _materialsWithBuildings;
 
         internal static void Init()
         {
@@ -65,7 +67,7 @@ namespace AdjustMod
         /// </summary>
         private static void BuildMaterialWithBuildingsSet()
         {
-            _materialsWithBuildings = new HashSet<short>();
+            _materialsWithBuildings = new HashSet<TemplateKey>();
             var buildingConfigs = BuildingBlock.Instance;
             int count = buildingConfigs.Count;
             for (int i = 0; i < count; i++)
@@ -73,7 +75,8 @@ namespace AdjustMod
                 var config = buildingConfigs[i];
                 if (config == null) continue;
                 if (config.BuildingCoreItem <= 0) continue;
-                _materialsWithBuildings.Add(config.BuildingCoreItem);
+                // BuildingCoreItem 只存 TemplateId，心材实际属于杂物类 Misc(ItemType=12)
+                _materialsWithBuildings.Add(new TemplateKey(ItemType.Misc, config.BuildingCoreItem));
             }
 
             ModMain.LogDebug($"心材→建筑映射构建完成，共 {_materialsWithBuildings.Count} 种心材有建筑依赖");
@@ -88,8 +91,12 @@ namespace AdjustMod
         private static bool IsMaterialWithBuildings(ItemKey key, out short templateId)
         {
             templateId = key.TemplateId;
+            // 必须用 TemplateKey（ItemType+TemplateId）匹配：不同物品类型的 TemplateId 独立编号，
+            // 只比 TemplateId 会导致护具/宝物等与心材 TemplateId 撞数值时误判。
+            // 心材属于杂物类 Misc(ItemType=12)，护具=1、宝物=2 等装备类不会撞进来。
             return _materialsWithBuildings != null
-                && _materialsWithBuildings.Contains(templateId);
+                && key.ItemType == ItemType.Misc
+                && _materialsWithBuildings.Contains(key.TemplateKey);
         }
 
         #endregion
