@@ -1,5 +1,6 @@
 using System;
 using System.Reflection;
+using FrameWork;
 using Game.Views.MouseTips.Item.Common;
 using HarmonyLib;
 using UnityEngine;
@@ -7,22 +8,23 @@ using UnityEngine.UI;
 
 namespace AdjustMod
 {
-    /// <summary>
-    /// 物品浮窗优化补丁 —— 默认显示详情 + Alt 单次键切换简详。
-    ///
-    /// 影响范围：所有继承自 <see cref="TooltipItemBase"/> 的浮窗，包括装备、书籍、材料等。
-    /// 原版行为：按住 Alt 显示详细，松开回到简略。
-    /// 本补丁改为：默认显示详细，按一次 Alt 切换简详。
-    ///
-    /// 实现说明：
-    ///   - 把 Alt 检测放在 <see cref="TooltipItemBase.UpdateDetail"/> 的 Prefix 里，
-    ///     利用原版 <see cref="TooltipItemBase.Update"/> 每帧对 UpdateDetail() 的调用
-    ///     作为"监控点"。
-    ///   - 用 <see cref="Time.frameCount"/> 记录最近一次切换的帧号，避免同一帧内
-    ///     UpdateDetail 被多次调用导致 Alt 被重复触发。
-    ///   - 不再因为 HasStick 而跳过 Alt 检测，确保被 stick 到 PermanentTips 的提示
-    ///     （如百晓册、固定提示）也能响应 Alt。
-    /// </summary>
+/// <summary>
+/// 物品浮窗优化补丁 —— 默认显示详情 + Alt 单次键切换简详。
+///
+/// 影响范围：所有继承自 <see cref="TooltipItemBase"/> 的浮窗，包括装备、书籍、材料等。
+/// 原版行为：按住 Alt 显示详细，松开回到简略。
+/// 本补丁改为：默认显示详细，按一次 Alt 切换简详。
+///
+/// 实现说明：
+///   - Alt 检测用边沿检测 CheckAltSinglePress（松开→按住才触发一次），避免
+///     Windows 按键 auto-repeat 让状态反复翻转。_altWasDown 每帧最多清零一次，
+///     防止百晓册高频 Init 间 Input.GetKey 间歇返回 false 误清边沿。
+///   - 两个 Alt 监控点：
+///     1. UpdateDetail Prefix（tooltip 固定后 Update 每帧调用 UpdateDetail）。
+///     2. Init Postfix（百晓册未固定时 tooltip 被反复 Init，Init 比 UpdateDetail 更频繁）。
+///   - Init Postfix 还负责把 Init 内 rootDetail.SetActive(false) 关掉的 detail 面板
+///     立即拉回 _detailMode，消除闪烁过渡帧。
+/// </summary>
     [HarmonyPatch]
     internal static class EquipTooltipPatch
     {
@@ -37,8 +39,47 @@ namespace AdjustMod
         private static bool _detailMode = true;
         /// <summary>最近一次 Alt 切换发生的帧号，用于防止同一帧内多次切换。</summary>
         private static int _lastToggleFrame = -1;
+        /// <summary>上一帧 Alt 是否处于按住状态——做边沿检测，避免某些环境下
+        /// Windows 按键自动重复 (auto-repeat) 让 GetKeyDown 反复返回 true。</summary>
+        private static bool _altWasDown = false;
+        /// <summary>最近一次更新 _altWasDown=false 的帧号——确保每帧最多清零一次，
+        /// 避免同一帧内多次 Init 之间 Input.GetKey 短暂返回 false 误清边沿。</summary>
+        private static int _lastAltCheckFrame = -1;
 
-        /// <summary>建立反射缓存。在 ModMain.Initialize() 中调用。</summary>
+        /// <summary>
+        /// 统一的 Alt 单次按下检测：做"从松开到按住"的边沿检测，
+        /// 杜绝 Windows 按键 auto-repeat 让 GetKeyDown/getKey 反复触发的问题。
+        ///
+        /// 关键：_altWasDown 每帧最多更新一次（用 _lastAltCheckFrame 防一帧多次 Init 误清），
+        /// 防止百晓册高频 Init 调用时 Input.GetKey 间歇性返回 false 导致边沿被误重置。
+        /// </summary>
+        internal static bool CheckAltSinglePress()
+        {
+            int frame = Time.frameCount;
+            if (frame == _lastToggleFrame) return false;
+
+            bool altDown = Input.GetKey(KeyCode.LeftAlt) || Input.GetKey(KeyCode.RightAlt);
+
+            // 边沿检测：只在"上一帧没按、这一帧按了"时触发
+            if (altDown && !_altWasDown)
+            {
+                _altWasDown = true;
+                _lastToggleFrame = frame;
+                return true;
+            }
+
+            // 每帧最多更新一次 _altWasDown = false：
+            // 只有当这一帧还没做过 Alt 状态检查、且当前 Alt 确实松开时才清零，
+            // 避免百晓册同一帧内多次 Init 之间 Input.GetKey 短暂返回 false 误清边沿。
+            if (!altDown && _lastAltCheckFrame != frame)
+            {
+                _altWasDown = false;
+                _lastAltCheckFrame = frame;
+            }
+            return false;
+        }
+
+/// <summary>建立反射缓存。在 ModMain.Initialize() 中调用。</summary>
         internal static void Init()
         {
             try
@@ -64,6 +105,43 @@ namespace AdjustMod
         }
 
         /// <summary>
+        /// patch Init Postfix：原版 Init 末尾会 rootDetail.SetActive(false)，百晓册未固定时
+        /// tooltip 会被反复 Init（每秒数次），每次都把详情面板关掉，造成按 Alt "闪一下变回来"。
+        /// 在此 Postfix 立即把 rootDetail.activeSelf 对齐到 _detailMode，消除闪烁过渡帧。
+        /// 同时在此检测 Alt——百晓册未固定时 Init 比 UpdateDetail 调用更频繁，是更可靠的监控点。
+        /// </summary>
+        [HarmonyPatch(typeof(TooltipItemBase), "Init")]
+        [HarmonyPostfix]
+        internal static void Init_Postfix(TooltipItemBase __instance)
+        {
+            if (!ModMain.GetSettingBool("EquipDetailDefault", true)) return;
+            if (_fRootDetail == null || _fIsDetail == null || _fDisableDetail == null) return;
+            try
+            {
+                // 在 Init 后也检测 Alt，弥补百晓册未固定时 UpdateDetail 不被调用的情况
+                if (CheckAltSinglePress())
+                {
+                    _detailMode = !_detailMode;
+                    ModMain.LogDebug($"物品浮窗 Alt 切换(Init)：detailMode={_detailMode}, frame={Time.frameCount}");
+                }
+
+                bool disableDetail = (bool)_fDisableDetail.GetValue(__instance)!;
+                if (disableDetail) return;
+
+                _fIsDetail.SetValue(__instance, _detailMode);
+                var rootDetail = _fRootDetail.GetValue(__instance) as GameObject;
+                if (rootDetail != null && rootDetail.activeSelf != _detailMode)
+                {
+                    rootDetail.SetActive(_detailMode);
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"[{ModMain.LogTag}] Init postfix 异常: {ex.Message}");
+            }
+        }
+
+        /// <summary>
         /// patch UpdateDetail：默认显示详情，按 Alt 切换简详。
         /// </summary>
         [HarmonyPatch(typeof(TooltipItemBase), "UpdateDetail")]
@@ -80,17 +158,18 @@ namespace AdjustMod
                 if (disableDetail) return false;
 
                 // 检测 Alt 单次按下，切换 _detailMode
-                int frame = Time.frameCount;
-                if (frame != _lastToggleFrame &&
-                    (Input.GetKeyDown(KeyCode.LeftAlt) || Input.GetKeyDown(KeyCode.RightAlt)))
+                if (CheckAltSinglePress())
                 {
                     _detailMode = !_detailMode;
-                    _lastToggleFrame = frame;
-                    ModMain.LogDebug($"物品浮窗 Alt 切换：detailMode={_detailMode}, frame={frame}");
+                    ModMain.LogDebug($"物品浮窗 Alt 切换：detailMode={_detailMode}, frame={Time.frameCount}");
                 }
 
                 // 应用当前模式
-                _fIsDetail.SetValue(__instance, _detailMode);
+                bool curIsDetail = (bool)_fIsDetail.GetValue(__instance)!;
+                if (curIsDetail != _detailMode)
+                {
+                    _fIsDetail.SetValue(__instance, _detailMode);
+                }
                 var rootDetail = _fRootDetail.GetValue(__instance) as GameObject;
 
                 if (rootDetail != null && rootDetail.activeSelf != _detailMode)

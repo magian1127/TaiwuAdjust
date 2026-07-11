@@ -31,8 +31,6 @@ namespace AdjustMod
 
         /// <summary>当前详细模式状态。true = 显示详细，false = 显示简略。</summary>
         private static bool _detailMode = true;
-        /// <summary>最近一次 Alt 切换发生的帧号，用于防止同一帧内多次切换。</summary>
-        private static int _lastToggleFrame = -1;
 
         internal static void Init()
         {
@@ -46,7 +44,8 @@ namespace AdjustMod
 
         /// <summary>
         /// 用 _detailMode 字段取代 Alt 键状态，控制详细/简略模式切换。
-        /// 在方法内部检测 Alt 单次按下，切换 _detailMode。
+        /// Alt 单次按下检测委托给 EquipTooltipPatch.CheckAltSinglePress，
+        /// 做边沿检测避免 Windows 按键 auto-repeat 导致反复触发。
         /// </summary>
         [HarmonyPatch(typeof(TooltipCombatSkill), "IsDetailMode")]
         [HarmonyPrefix]
@@ -54,13 +53,10 @@ namespace AdjustMod
         {
             if (!ModMain.GetSettingBool("EquipDetailDefault", true)) return true;
 
-            int frame = Time.frameCount;
-            if (frame != _lastToggleFrame &&
-                (Input.GetKeyDown(KeyCode.LeftAlt) || Input.GetKeyDown(KeyCode.RightAlt)))
+            if (EquipTooltipPatch.CheckAltSinglePress())
             {
                 _detailMode = !_detailMode;
-                _lastToggleFrame = frame;
-                ModMain.LogDebug($"功法浮窗 Alt 切换：detailMode={_detailMode}, frame={frame}");
+                ModMain.LogDebug($"功法浮窗 Alt 切换：detailMode={_detailMode}, frame={Time.frameCount}");
             }
 
             __result = _detailMode;
