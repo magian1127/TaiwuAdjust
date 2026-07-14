@@ -235,18 +235,21 @@ namespace AdjustMod
         /// 创建「内力震慑」按钮。
         ///
         /// 【创建流程】
-        ///   1. 找到 SelfInfo 下的「查看人物」按钮（BtnOpenCharMenu）→ 取其父容器作为挂载点
+        ///   1. 找 SelfInfo 下的同道列表容器（TeammateHolder），按钮挂它下面
         ///   2. 找可用 TMP 字体模板 → 复制 font/material/spriteAsset（否则中文不显示）
-        ///   3. 创建 GameObject + RectTransform + Image + CButton → 挂到 SelfInfo 容器
-        ///   4. 定位：用世界坐标（GetWorldCorners）计算「查看人物」按钮的中心，
-        ///      再向左偏移，转回父容器局部坐标。世界坐标定位对锚点差异免疫。
+        ///   3. 创建 GameObject + RectTransform + Image + CButton + LayoutElement → 挂到 TeammateHolder
+        ///      ★ LayoutElement.ignoreLayout=true：让 VLG 不控制本按钮的位置，anchoredPosition 生效
+        ///   4. 定位：顶部居中锚点，anchoredPosition 浮在 TeammateHolder 顶部（同道列表上方）
         ///   5. 创建子 TMP 文本「内力震慑」→ 复制字体模板
         ///   6. 绑定点击事件 → 初始灰色，等 RefreshButtonState 切真实状态
+        ///
+        /// 【为什么 ignoreLayout】TeammateHolder 是 VerticalLayoutGroup，子元素的 anchoredPosition
+        ///   默认被布局覆盖；同道不足时隐藏槽位让 VLG 收缩，按钮漂移重叠到上方。
+        ///   ignoreLayout=true 让按钮脱离 VLG 控制，固定锚定 TeammateHolder 顶部，不随同道数量变化。
         /// </summary>
         private static void CreateShockButton(ViewCombatBegin view)
         {
             // 找 SelfInfo 下的同道列表容器（TeammateHolder），按钮作为它的子级
-            // —— 坐标系简单可控，且自然排在队友列表下方
             var holderTr = (view as Component).transform.Find("Content/SelfInfo/TeammateHolder");
             if (holderTr == null)
             {
@@ -259,9 +262,13 @@ namespace AdjustMod
             var fontSrc = FindFontTemplate(holderRt, view);
             if (fontSrc == null) { Debug.Log($"[{ModMain.LogTag}] 内力震慑：找不到可用字体模板 TMP"); return; }
 
-            var go = new GameObject("AdjustMod_NeiliShockButton", typeof(RectTransform), typeof(Image), typeof(CButton));
+            var go = new GameObject("AdjustMod_NeiliShockButton",
+                typeof(RectTransform), typeof(Image), typeof(CButton), typeof(LayoutElement));
             go.transform.SetParent(holderRt, false);
             var rt = go.GetComponent<RectTransform>();
+            // ★ ignoreLayout：脱离 VLG 控制，anchoredPosition 生效，不随同道数量漂移
+            var le = go.GetComponent<LayoutElement>();
+            le.ignoreLayout = true;
             // 顶部居中锚点 + 中心 pivot
             rt.anchorMin = new Vector2(0.5f, 1f);
             rt.anchorMax = new Vector2(0.5f, 1f);
